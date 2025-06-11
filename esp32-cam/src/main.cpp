@@ -2,9 +2,9 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-// WiFi credentials
-const char *ssid = "Ooredoo_94";
-const char *password = "freebanana244";
+// WiFi credentials from build flags
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_PASSWORD;
 
 WebServer server(80);
 

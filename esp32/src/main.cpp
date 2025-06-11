@@ -25,9 +25,17 @@ HardwareSerial CamSerial(1); // Use Serial1 for camera communication
 
 Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// Wi-Fi credentials
-const char *ssid = "Ooredoo_94";
-const char *password = "freebanana244";
+// Wi-Fi credentials from environment variables
+#ifndef WIFI_SSID
+#define WIFI_SSID "YourDefaultSSID"
+#endif
+
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "YourDefaultPassword"
+#endif
+
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_PASSWORD;
 
 // Create a Wi-Fi server
 WiFiServer server(80);

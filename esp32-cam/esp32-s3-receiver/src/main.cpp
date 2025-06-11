@@ -6,9 +6,9 @@
 #define CAM_RX_PIN 17  // Connect to ESP32-CAM TX
 #define CAM_TX_PIN 18  // Connect to ESP32-CAM RX
 
-// WiFi credentials (optional - for web interface)
-const char* ssid = "Ooredoo_94";
-const char* password = "freebanana244";
+// WiFi credentials from build flags
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 WebServer server(80);
 HardwareSerial CamSerial(1);
