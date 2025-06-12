@@ -1,0 +1,36 @@
+#include <HardwareSerial.h>
+#include "oled_display.h" // Include OLED helper functions
+
+#define CAM_SERIAL_TX 43  // ESP32-S3 TX pin
+#define CAM_SERIAL_RX 44  // ESP32-S3 RX pin
+
+HardwareSerial CamSerial(1); // Use UART1 for communication with ESP32-CAM
+
+void setup() {
+    Serial.begin(9600); // Debugging
+    initOLED(); // Initialize OLED display
+
+    displayText("ESP32-S3: Code is running...");
+    Serial.println("ESP32-S3: Code is running...");
+
+    CamSerial.begin(9600, SERIAL_8N1, CAM_SERIAL_RX, CAM_SERIAL_TX); // Initialize Serial1
+       delay(2000); // Small delay
+    displayText("ESP32-S3: Starting...");
+    Serial.println("ESP32-S3: Starting...");
+}
+
+void loop() {
+    // Send PING to ESP32-CAM
+    CamSerial.println("PING");
+    displayText("Sent PING to ESP32-CAM");
+    Serial.println("ESP32-S3: Sent PING to ESP32-CAM");
+
+    // Wait for response
+    if (CamSerial.available()) {
+        String response = CamSerial.readStringUntil('\n');
+        displayText("Received: " + response);
+        Serial.println("ESP32-S3: Received from ESP32-CAM: " + response);
+    }
+
+    delay(1000); // Wait 1 second
+}

@@ -1,0 +1,37 @@
+#include <HardwareSerial.h>
+
+void setup()
+{
+    // VOR = 3, TOR = 1, Not receiving from esp32s3
+    Serial1.begin(9600, SERIAL_8N1, 3, 1);
+
+    // RX1 = GPIO14, TX1 = GPIO15
+    // Serial1.begin(9600, SERIAL_8N1, 14, 15);
+
+    delay(500); // Small delay
+    Serial1.println("ESP32-CAM: Starting...");
+}
+
+void loop()
+{
+
+    String command = Serial1.readStringUntil('\n');
+    command.trim();
+    // Respond to PING
+    if (command == "PING")
+    {
+        Serial1.println("PONG");
+    }
+
+    static unsigned long lastSend = 0;
+    if (millis() - lastSend > 2000)
+    {
+        String lastCommand = Serial1.readStringUntil('\n');
+        Serial1.println("FROM CMD: LAST COMMAND: " + lastCommand);
+        Serial1.println("FROM CAM: ALIVE");
+        Serial1.println("FROM CAM: Serial1 status: " + String(Serial1.available()));
+        lastSend = millis();
+    }
+
+    delay(100); // Small delay
+}
