@@ -4,6 +4,7 @@
 #include <Adafruit_SH110X.h>
 #include <HardwareSerial.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
 
 // OLED display settings
 #define SCREEN_WIDTH 128
@@ -21,21 +22,20 @@ Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define CAM_SERIAL_TX 17  // Connect to ESP32-CAM RX (VOR)
 #define CAM_SERIAL_RX 18  // Connect to ESP32-CAM TX (VOT)
 
+// EEPROM settings
+#define EEPROM_SIZE 512
+#define EEPROM_WIFI_FLAG 0    // 1 byte for flag
+#define EEPROM_SSID_START 1   // 33 bytes for SSID (32 + null terminator)
+#define EEPROM_PASS_START 34  // 65 bytes for password (64 + null terminator)
+
 HardwareSerial CamSerial(1); // Use Serial1 for camera communication
 
 Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// Wi-Fi credentials from environment variables
-#ifndef WIFI_SSID
-#define WIFI_SSID "YourDefaultSSID"
-#endif
-
-#ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD "YourDefaultPassword"
-#endif
-
-const char *ssid = WIFI_SSID;
-const char *password = WIFI_PASSWORD;
+// WiFi credentials variables
+String wifi_ssid = "";
+String wifi_password = "";
+bool wifiConfigured = false;
 
 // Create a Wi-Fi server
 WiFiServer server(80);
@@ -43,6 +43,145 @@ WiFiServer server(80);
 // Camera status
 bool cameraAvailable = false;
 String lastImageBase64 = "";
+
+// New variables for periodic checking:
+unsigned long lastCameraCheck = 0;
+const unsigned long CAMERA_CHECK_INTERVAL = 30000; // Check every 30 seconds
+bool lastCameraState = false;
+
+// Function to save WiFi credentials to EEPROM
+void saveWiFiCredentials(String ssid, String password) {
+    Serial.println("Saving WiFi credentials to EEPROM...");
+    
+    // Set flag to indicate WiFi is configured
+    EEPROM.write(EEPROM_WIFI_FLAG, 1);
+    
+    // Save SSID
+    for (int i = 0; i < 32; i++) {
+        if (i < ssid.length()) {
+            EEPROM.write(EEPROM_SSID_START + i, ssid[i]);
+        } else {
+            EEPROM.write(EEPROM_SSID_START + i, 0);
+        }
+    }
+    
+    // Save Password
+    for (int i = 0; i < 64; i++) {
+        if (i < password.length()) {
+            EEPROM.write(EEPROM_PASS_START + i, password[i]);
+        } else {
+            EEPROM.write(EEPROM_PASS_START + i, 0);
+        }
+    }
+    
+    EEPROM.commit();
+    Serial.println("WiFi credentials saved!");
+}
+
+// Function to load WiFi credentials from EEPROM
+bool loadWiFiCredentials() {
+    Serial.println("Loading WiFi credentials from EEPROM...");
+    
+    // Check if WiFi is configured
+    if (EEPROM.read(EEPROM_WIFI_FLAG) != 1) {
+        Serial.println("No WiFi credentials found in EEPROM");
+        return false;
+    }
+    
+    // Load SSID
+    wifi_ssid = "";
+    for (int i = 0; i < 32; i++) {
+        char c = EEPROM.read(EEPROM_SSID_START + i);
+        if (c == 0) break;
+        wifi_ssid += c;
+    }
+    
+    // Load Password
+    wifi_password = "";
+    for (int i = 0; i < 64; i++) {
+        char c = EEPROM.read(EEPROM_PASS_START + i);
+        if (c == 0) break;
+        wifi_password += c;
+    }
+    
+    if (wifi_ssid.length() > 0) {
+        Serial.println("WiFi credentials loaded from EEPROM");
+        Serial.println("SSID: " + wifi_ssid);
+        return true;
+    }
+    
+    return false;
+}
+
+// Function to clear WiFi credentials
+void clearWiFiCredentials() {
+    Serial.println("Clearing WiFi credentials...");
+    EEPROM.write(EEPROM_WIFI_FLAG, 0);
+    EEPROM.commit();
+    wifi_ssid = "";
+    wifi_password = "";
+    wifiConfigured = false;
+    Serial.println("WiFi credentials cleared!");
+}
+
+// Function to get WiFi credentials via Serial
+void getWiFiCredentialsFromSerial() {
+    Serial.println("\n==========================================");
+    Serial.println("         WiFi CONFIGURATION SETUP        ");
+    Serial.println("==========================================");
+    Serial.println("No WiFi credentials found or connection failed.");
+    Serial.println("Please enter your WiFi credentials:");
+    
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("WiFi Setup");
+    display.println("Check Serial Monitor");
+    display.display();
+    
+    // Get SSID
+    Serial.print("Enter WiFi SSID: ");
+    while (!Serial.available()) {
+        delay(100);
+    }
+    wifi_ssid = Serial.readString();
+    wifi_ssid.trim();
+    Serial.println(wifi_ssid);
+    
+    // Get Password
+    Serial.print("Enter WiFi Password: ");
+    while (!Serial.available()) {
+        delay(100);
+    }
+    wifi_password = Serial.readString();
+    wifi_password.trim();
+    Serial.println("Password entered (hidden)");
+    
+    // Confirm credentials
+    Serial.println("\nCredentials entered:");
+    Serial.println("SSID: " + wifi_ssid);
+    Serial.println("Password: " + String(wifi_password.length()) + " characters");
+    Serial.print("Save these credentials? (y/n): ");
+    
+    while (!Serial.available()) {
+        delay(100);
+    }
+    String confirm = Serial.readString();
+    confirm.trim();
+    confirm.toLowerCase();
+    
+    if (confirm == "y" || confirm == "yes") {
+        saveWiFiCredentials(wifi_ssid, wifi_password);
+        wifiConfigured = true;
+        Serial.println("Credentials saved! Restarting...");
+        delay(2000);
+        ESP.restart();
+    } else {
+        Serial.println("Credentials not saved. Please restart to try again.");
+        while (true) {
+            delay(1000);
+        }
+    }
+}
 
 // Helper function to set color and delay
 void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
@@ -62,16 +201,31 @@ String sendCameraCommand(String command, bool expectLargeData = false) {
         CamSerial.read();
     }
     
+    Serial.println("Sending command: '" + command + "'");
     CamSerial.println(command);
     
     if (!expectLargeData) {
-        // Standard response handling
+        // Standard response handling with debugging
         unsigned long startTime = millis();
         String response = "";
         
         while (millis() - startTime < 5000) { // 5-second timeout
             if (CamSerial.available()) {
                 char c = CamSerial.read();
+                
+                // Debug: show raw byte values for first few characters
+                if (response.length() < 10) {
+                    Serial.print("Raw byte: ");
+                    Serial.print((int)c);
+                    Serial.print(" (char: '");
+                    if (c >= 32 && c <= 126) {
+                        Serial.print(c);
+                    } else {
+                        Serial.print("?");
+                    }
+                    Serial.println("')");
+                }
+                
                 response += c;
                 
                 if (c == '\n') {
@@ -82,6 +236,7 @@ String sendCameraCommand(String command, bool expectLargeData = false) {
         }
         
         response.trim();
+        Serial.println("Final response: '" + response + "' (length: " + String(response.length()) + ")");
         return response;
     } else {
         // Handle chunked base64 data
@@ -169,7 +324,8 @@ bool capturePhoto() {
         Serial.println("Requesting image data...");
         String imageData = sendCameraCommand("GETIMAGE", true); // Enable large data mode
         
-        if (imageData.length() > 100) { // Basic check for base64 data
+        if (imageData.length() > 100) // Basic check for base64 data
+        {
             lastImageBase64 = imageData;
             display.println("Photo received!");
             display.display();
@@ -213,7 +369,7 @@ bool checkCamera() {
     return status;
 }
 
-// Generate HTML page with optional image
+// Generate HTML page with optional image and WiFi config
 String getHtmlPage(String message, bool showImage = false) {
     String html = "<!DOCTYPE html><html>";
     html += "<head><title>ESP32 Camera Control</title>";
@@ -223,15 +379,21 @@ String getHtmlPage(String message, bool showImage = false) {
     html += "button { background-color: #4CAF50; color: white; padding: 10px 20px; ";
     html += "margin: 10px; border: none; border-radius: 4px; cursor: pointer; }";
     html += "button:hover { background-color: #45a049; }";
+    html += ".ping-btn { background-color: #2196F3; }";
+    html += ".ping-btn:hover { background-color: #0b7dda; }";
+    html += ".clear-btn { background-color: #f44336; }";
+    html += ".clear-btn:hover { background-color: #da190b; }";
     html += "img { margin-top: 20px; max-width: 100%; border: 1px solid #ddd; }";
     html += ".status { background-color: #f0f0f0; padding: 10px; margin: 10px; }";
     html += "</style></head><body>";
     html += "<h1>ESP32 Camera Control</h1>";
     html += "<div class='status'>";
     html += "<p>Camera Status: " + String(cameraAvailable ? "Connected" : "Disconnected") + "</p>";
+    html += "<p>WiFi SSID: " + wifi_ssid + "</p>";
     html += "<p>" + message + "</p>";
     html += "</div>";
     html += "<div><button onclick=\"location.href='/LED_ON'\">Turn LED ON</button>";
+    html += "<button class='ping-btn' onclick=\"location.href='/ping'\">PING Camera</button>";
     
     if (cameraAvailable) {
         html += "<button onclick=\"location.href='/capture'\">Take Photo</button>";
@@ -246,9 +408,83 @@ String getHtmlPage(String message, bool showImage = false) {
         html += "</div><p>Camera not available</p>";
     }
     
+    html += "<div><button class='clear-btn' onclick=\"if(confirm('Clear WiFi credentials and restart?')) location.href='/clearwifi'\">Clear WiFi Settings</button></div>";
     html += "<br><a href='/'>Refresh Page</a>";
     html += "</body></html>";
     return html;
+}
+
+// Periodic camera health check function
+void checkCameraAvailability() {
+    unsigned long currentTime = millis();
+    
+    // Check if it's time for periodic check
+    if (currentTime - lastCameraCheck >= CAMERA_CHECK_INTERVAL) {
+        Serial.println("Performing periodic camera health check...");
+        
+        // Quick ping test (faster than full status check)
+        String response = sendCameraCommand("PING");
+        bool newCameraState = (response == "PONG");
+        
+        // Check if camera state changed
+        if (newCameraState != cameraAvailable) {
+            Serial.println("Camera state changed: " + String(newCameraState ? "Connected" : "Disconnected"));
+            cameraAvailable = newCameraState;
+            
+            // Update display with status change
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.println("Camera status:");
+            display.println(cameraAvailable ? "Connected" : "Disconnected");
+            display.println("Auto-detected");
+            display.display();
+            delay(2000); // Show status for 2 seconds
+            
+            // Flash LED to indicate status change
+            if (cameraAvailable) {
+                // Green flash for connected
+                for (int i = 0; i < 3; i++) {
+                    setPixelColor(0, 255, 0, 200);
+                    setPixelColor(0, 0, 0, 200);
+                }
+                setPixelColor(0, 255, 0); // Return to green
+            } else {
+                // Red flash for disconnected
+                for (int i = 0; i < 3; i++) {
+                    setPixelColor(255, 0, 0, 200);
+                    setPixelColor(0, 0, 0, 200);
+                }
+                setPixelColor(255, 100, 0); // Orange for no camera
+            }
+        } else if (cameraAvailable) {
+            // Camera still available, just log it
+            Serial.println("Camera health check: OK");
+        } else {
+            // Camera still unavailable
+            Serial.println("Camera health check: Still disconnected");
+        }
+        
+        lastCameraCheck = currentTime;
+    }
+}
+
+// Add this function to check camera before operations:
+bool ensureCameraReady() {
+    if (!cameraAvailable) {
+        Serial.println("Camera not available, testing connection...");
+        String response = sendCameraCommand("PING");
+        cameraAvailable = (response == "PONG");
+        
+        if (cameraAvailable) {
+            Serial.println("Camera reconnected!");
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.println("Camera reconnected!");
+            display.display();
+            delay(1000);
+        }
+    }
+    return cameraAvailable;
 }
 
 void setup()
@@ -259,9 +495,12 @@ void setup()
     delay(10);
     pinMode(LED_BUILTIN, OUTPUT);
 
+    // Initialize EEPROM
+    EEPROM.begin(EEPROM_SIZE);
+    
     // Initialize camera serial connection
-    CamSerial.begin(115200, SERIAL_8N1, CAM_SERIAL_RX, CAM_SERIAL_TX);
-    delay(1000); // Give ESP32-CAM time to boot
+    CamSerial.begin(9600, SERIAL_8N1, CAM_SERIAL_RX, CAM_SERIAL_TX);
+    delay(5000); // Give ESP32-CAM time to boot
 
     // Initialize OLED display
     Wire.begin(OLED_SDA, OLED_SCL);
@@ -303,30 +542,83 @@ void setup()
     display.display();
     delay(2000);
 
-    // Connect to Wi-Fi
+    // Load WiFi credentials from EEPROM
+    wifiConfigured = loadWiFiCredentials();
+    
+    if (!wifiConfigured) {
+        getWiFiCredentialsFromSerial();
+    }
+
+    // Connect to Wi-Fi with debugging
+    Serial.println("==========================================");
+    Serial.println("         ESP32-S3 WiFi CONNECTION        ");
+    Serial.println("==========================================");
+    Serial.printf("WiFi SSID: %s\n", wifi_ssid.c_str());
+    Serial.printf("WiFi Password: %s\n", wifi_password.length() > 0 ? "***configured***" : "***NOT SET***");
+    Serial.printf("WiFi Password Length: %d characters\n", wifi_password.length());
+    Serial.println("==========================================");
+    
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("WiFi Debug:");
+    display.printf("SSID: %s\n", wifi_ssid.c_str());
+    display.printf("Pass: %s\n", wifi_password.length() > 0 ? "SET" : "EMPTY");
+    display.display();
+    delay(2000);
+    
     Serial.println("Connecting to Wi-Fi...");
     display.clearDisplay();
     display.setCursor(0, 0);
     display.println("Connecting to Wi-Fi...");
     display.display();
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED)
+    
+    WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
+    
+    int wifiAttempts = 0;
+    while (WiFi.status() != WL_CONNECTED && wifiAttempts < 30)
     {
         delay(500);
         Serial.print(".");
         display.print(".");
         display.display();
+        wifiAttempts++;
+        
+        // Print detailed status every 5 attempts
+        if (wifiAttempts % 5 == 0) {
+            Serial.printf("\nWiFi Status: %d (attempt %d/30)\n", WiFi.status(), wifiAttempts);
+            Serial.printf("MAC Address: %s\n", WiFi.macAddress().c_str());
+        }
     }
-    Serial.println("\nWi-Fi connected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-
-    // Display Wi-Fi connection status
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.println("Wi-Fi connected!");
-    display.print("IP: ");
-    display.println(WiFi.localIP());
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n==========================================");
+        Serial.println("         WiFi CONNECTED SUCCESSFULLY     ");
+        Serial.println("==========================================");
+        Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+        Serial.printf("Subnet: %s\n", WiFi.subnetMask().toString().c_str());
+        Serial.printf("DNS: %s\n", WiFi.dnsIP().toString().c_str());
+        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+        Serial.printf("Channel: %d\n", WiFi.channel());
+        Serial.println("==========================================");
+        
+        // Display Wi-Fi connection status
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.println("Wi-Fi connected!");
+        display.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+        display.printf("RSSI: %d dBm\n", WiFi.RSSI());
+    } else {
+        Serial.println("\n==========================================");
+        Serial.println("         WiFi CONNECTION FAILED          ");
+        Serial.println("==========================================");
+        Serial.printf("Final Status: %d\n", WiFi.status());
+        Serial.println("WiFi connection failed! Clearing credentials and restarting...");
+        clearWiFiCredentials();
+        delay(2000);
+        ESP.restart();
+    }
+    
     if (cameraAvailable) {
         display.println("Camera: OK");
     } else {
@@ -334,10 +626,16 @@ void setup()
     }
     display.display();
 
-    // Start the server
-    server.begin();
-    Serial.println("Server started!");
-    display.println("Server started!");
+    // Start the server only if WiFi connected
+    if (WiFi.status() == WL_CONNECTED) {
+        server.begin();
+        Serial.println("Web server started!");
+        Serial.printf("Access at: http://%s\n", WiFi.localIP().toString().c_str());
+        display.println("Server started!");
+    } else {
+        Serial.println("Web server NOT started (no WiFi)");
+        display.println("No web server");
+    }
     display.display();
 
     // Indicate server availability with green LED
@@ -346,6 +644,9 @@ void setup()
 
 void loop()
 {
+    // Perform periodic camera availability check
+    checkCameraAvailability();
+    
     // Check for client connections
     WiFiClient client = server.available();
     if (client)
@@ -389,6 +690,21 @@ void loop()
                     client.println();
                     client.println(getHtmlPage("LED turned ON"));
                 }
+                else if (request.indexOf("/clearwifi") != -1)
+                {
+                    Serial.println("Clearing WiFi credentials and restarting");
+                    
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println("<!DOCTYPE html><html><body><h1>WiFi Credentials Cleared</h1><p>Device will restart in 3 seconds...</p><script>setTimeout(function(){window.close();}, 3000);</script></body></html>");
+                    
+                    delay(1000);
+                    client.stop();
+                    clearWiFiCredentials();
+                    delay(2000);
+                    ESP.restart();
+                }
                 else if (request.indexOf("/test") != -1)
                 {
                     Serial.println("Testing camera connection");
@@ -403,21 +719,69 @@ void loop()
                                       ", Camera: " + String(cameraAvailable ? "OK" : "FAIL");
                     client.println(getHtmlPage(testResult));
                 }
-                else if (request.indexOf("/capture") != -1 && cameraAvailable)
+                else if (request.indexOf("/capture") != -1)
                 {
                     Serial.println("Capture photo requested");
-                    bool success = capturePhoto();
+                    
+                    // Ensure camera is ready before capture
+                    if (ensureCameraReady()) {
+                        bool success = capturePhoto();
+                        
+                        // Send web response
+                        client.println("HTTP/1.1 200 OK");
+                        client.println("Content-Type: text/html");
+                        client.println();
+                        
+                        if (success) {
+                            client.println(getHtmlPage("Photo captured successfully!", true));
+                        } else {
+                            client.println(getHtmlPage("Failed to capture photo"));
+                        }
+                    } else {
+                        client.println("HTTP/1.1 200 OK");
+                        client.println("Content-Type: text/html");
+                        client.println();
+                        client.println(getHtmlPage("Camera not available - check connection"));
+                    }
+                }
+                else if (request.indexOf("/ping") != -1)
+                {
+                    Serial.println("PING camera requested");
+                    
+                    // Update OLED display
+                    display.clearDisplay();
+                    display.setCursor(0, 0);
+                    display.println("Pinging camera...");
+                    display.display();
+                    
+                    // Send PING command
+                    String response = sendCameraCommand("PING");
+                    
+                    Serial.println("PING response: '" + response + "'");
+                    
+                    // Update camera availability based on ping result
+                    cameraAvailable = (response == "PONG");
+                    
+                    // Update display with result
+                    display.clearDisplay();
+                    display.setCursor(0, 0);
+                    if (response == "PONG") {
+                        display.println("PING: SUCCESS");
+                        display.println("Response: PONG");
+                    } else {
+                        display.println("PING: FAILED");
+                        display.println("Response:");
+                        display.println(response.substring(0, 20)); // Show first 20 chars
+                    }
+                    display.display();
                     
                     // Send web response
                     client.println("HTTP/1.1 200 OK");
                     client.println("Content-Type: text/html");
                     client.println();
                     
-                    if (success) {
-                        client.println(getHtmlPage("Photo captured successfully!", true));
-                    } else {
-                        client.println(getHtmlPage("Failed to capture photo"));
-                    }
+                    String result = "PING Result: " + (response == "PONG" ? "SUCCESS (PONG)" : "FAILED - Response: '" + response + "'");
+                    client.println(getHtmlPage(result));
                 }
                 else
                 {
@@ -433,23 +797,33 @@ void loop()
         client.stop();
         Serial.println("Client disconnected.");
 
-        // Return to green LED after client disconnects
-        setPixelColor(0, 255, 0); // Solid Green
+        // Return to appropriate LED color based on camera status
+        if (cameraAvailable) {
+            setPixelColor(0, 255, 0); // Green for camera available
+        } else {
+            setPixelColor(255, 100, 0); // Orange for no camera
+        }
 
         // Update OLED display
         display.clearDisplay();
         display.setCursor(0, 0);
         display.println("Ready for clients");
+        display.printf("Camera: %s\n", cameraAvailable ? "OK" : "FAIL");
         display.display();
     }
     else
     {
-        // Breathing LED effect when idle
+        // Breathing LED effect when idle (color depends on camera status)
         static int brightness = 0;
         static int direction = 1;
         brightness += direction * 2;
         if (brightness >= 50 || brightness <= 0) direction *= -1;
-        setPixelColor(0, brightness, 0);
+        
+        if (cameraAvailable) {
+            setPixelColor(0, brightness, 0); // Green breathing for camera OK
+        } else {
+            setPixelColor(brightness, brightness/2, 0); // Orange breathing for no camera
+        }
         delay(50);
     }
 }
