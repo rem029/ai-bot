@@ -1,16 +1,12 @@
 #include <WiFi.h>
 #include <Adafruit_NeoPixel.h>
-#include <HardwareSerial.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 #include "oled_display.h" // Include the OLED display helper
+#include "esp32cam_manager.h" // Include the ESP32-CAM manager
 
 #define LED_PIN 48
 #define NUM_PIXELS 1
-
-// Define camera serial connection
-#define CAM_SERIAL_TX 43 // Connect to ESP32-CAM RX (VOR)
-#define CAM_SERIAL_RX 44 // Connect to ESP32-CAM TX (VOT)
 
 // EEPROM settings
 #define EEPROM_SIZE 512
@@ -18,9 +14,8 @@
 #define EEPROM_SSID_START 1  // 33 bytes for SSID (32 + null terminator)
 #define EEPROM_PASS_START 34 // 65 bytes for password (64 + null terminator)
 
-HardwareSerial CamSerial(1); // Use Serial1 for camera communication
-
 Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+ESP32CamManager camManager;
 
 // WiFi credentials variables
 String wifi_ssid = "";
@@ -30,14 +25,44 @@ bool wifiConfigured = false;
 // Create a Wi-Fi server
 WiFiServer server(80);
 
-// Camera status
-bool cameraAvailable = false;
-String lastImageBase64 = "";
+// Helper function to set color and delay
+void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
+{
+    pixels.setPixelColor(0, pixels.Color(r, g, b));
+    pixels.show();
+    if (delayMs > 0)
+    {
+        delay(delayMs);
+    }
+}
 
-// New variables for periodic checking:
-unsigned long lastCameraCheck = 0;
-const unsigned long CAMERA_CHECK_INTERVAL = 30000; // Check every 30 seconds
-bool lastCameraState = false;
+// Camera status callback to handle status changes
+void onCameraStatusChange(bool connected, bool statusChanged) {
+    if (statusChanged) {
+        // Update display with status change
+        displayMultiLine("Camera status:",
+                         (connected ? "Connected" : "Disconnected"),
+                         "Auto-detected", "");
+        delay(2000); // Show status for 2 seconds
+
+        // Flash LED to indicate status change
+        if (connected) {
+            // Green flash for connected
+            for (int i = 0; i < 3; i++) {
+                setPixelColor(0, 255, 0, 200);
+                setPixelColor(0, 0, 0, 200);
+            }
+            setPixelColor(0, 255, 0); // Return to green
+        } else {
+            // Red flash for disconnected
+            for (int i = 0; i < 3; i++) {
+                setPixelColor(255, 0, 0, 200);
+                setPixelColor(0, 0, 0, 200);
+            }
+            setPixelColor(255, 100, 0); // Orange for no camera
+        }
+    }
+}
 
 // Function to save WiFi credentials to EEPROM
 void saveWiFiCredentials(String ssid, String password)
@@ -196,217 +221,6 @@ void getWiFiCredentialsFromSerial()
     }
 }
 
-// Helper function to set color and delay
-void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
-{
-    pixels.setPixelColor(0, pixels.Color(r, g, b));
-    pixels.show();
-    if (delayMs > 0)
-    {
-        delay(delayMs);
-    }
-}
-
-// Function to send command to ESP32-CAM and get response
-String sendCameraCommand(String command, bool expectLargeData = false)
-{
-    // Clear any pending data first
-    while (CamSerial.available())
-    {
-        CamSerial.read();
-    }
-
-    Serial.println("Sending command: '" + command + "'");
-    CamSerial.println(command);
-
-    if (!expectLargeData)
-    {
-        // Standard response handling with debugging
-        unsigned long startTime = millis();
-        String response = "";
-
-        while (millis() - startTime < 5000)
-        { // 5-second timeout
-            if (CamSerial.available())
-            {
-                char c = CamSerial.read();
-
-                // Debug: show raw byte values for first few characters
-                if (response.length() < 10)
-                {
-                    Serial.print("Raw byte: ");
-                    Serial.print((int)c);
-                    Serial.print(" (char: '");
-                    if (c >= 32 && c <= 126)
-                    {
-                        Serial.print(c);
-                    }
-                    else
-                    {
-                        Serial.print("?");
-                    }
-                    Serial.println("')");
-                }
-
-                response += c;
-
-                if (c == '\n')
-                {
-                    break;
-                }
-            }
-            yield();
-        }
-
-        response.trim();
-        Serial.println("Final response: '" + response + "' (length: " + String(response.length()) + ")");
-        return response;
-    }
-    else
-    {
-        // Handle chunked base64 data
-        String fullResponse = "";
-        unsigned long startTime = millis();
-        bool readingBase64 = false;
-
-        while (millis() - startTime < 30000)
-        { // 30-second timeout for large data
-            if (CamSerial.available())
-            {
-                String line = CamSerial.readStringUntil('\n');
-                line.trim();
-
-                if (line == "BASE64_START")
-                {
-                    readingBase64 = true;
-                    continue;
-                }
-                else if (line == "BASE64_END")
-                {
-                    break;
-                }
-                else if (readingBase64)
-                {
-                    fullResponse += line;
-                }
-                else if (!readingBase64 && line.length() > 0)
-                {
-                    // This might be the initial response
-                    return line;
-                }
-
-                startTime = millis(); // Reset timeout on activity
-            }
-            yield();
-        }
-
-        return fullResponse;
-    }
-}
-
-// Test basic serial communication
-bool testCameraSerial()
-{
-    Serial.println("Testing camera serial communication...");
-
-    String response = sendCameraCommand("PING");
-
-    Serial.println("Camera PING response: '" + response + "'");
-
-    if (response == "PONG")
-    {
-        // Test version command
-        response = sendCameraCommand("VERSION");
-        Serial.println("Camera VERSION response: '" + response + "'");
-        return true;
-    }
-
-    return false;
-}
-
-// Function to capture photo from ESP32-CAM
-bool capturePhoto()
-{
-    Serial.println("Requesting photo from ESP32-CAM");
-    displayText("Taking photo...");
-
-    // First, send CAPTURE command to take the photo
-    String response = sendCameraCommand("CAPTURE");
-
-    Serial.println("CAPTURE response: " + response);
-
-    // Parse the JSON response
-    DynamicJsonDocument doc(256);
-    DeserializationError error = deserializeJson(doc, response);
-
-    if (error)
-    {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(error.c_str());
-        Serial.println("Raw response: " + response);
-        displayText("Camera error!");
-        return false;
-    }
-
-    // Check if photo was successful
-    bool success = doc["success"];
-    if (success)
-    {
-        // Request the image data with chunked reading
-        displayText("Getting image...");
-
-        Serial.println("Requesting image data...");
-        String imageData = sendCameraCommand("GETIMAGE", true); // Enable large data mode
-
-        if (imageData.length() > 100) // Basic check for base64 data
-        {
-            lastImageBase64 = imageData;
-            displayText("Photo received!");
-            Serial.println("Image received, size: " + String(imageData.length()));
-            return true;
-        }
-        else
-        {
-            Serial.println("Invalid image response, size: " + String(imageData.length()));
-            displayText("Invalid image!");
-            return false;
-        }
-    }
-    else
-    {
-        String error = doc["error"];
-        Serial.println("Capture failed: " + error);
-        displayText("Photo failed!");
-        return false;
-    }
-}
-
-// Check if camera is responding
-bool checkCamera()
-{
-    String response = sendCameraCommand("STATUS");
-
-    Serial.println("STATUS response: " + response);
-
-    if (response.length() == 0)
-    {
-        Serial.println("No response from camera");
-        return false;
-    }
-
-    DynamicJsonDocument doc(256);
-    DeserializationError error = deserializeJson(doc, response);
-
-    if (error)
-    {
-        Serial.println("Failed to parse camera status: " + response);
-        return false;
-    }
-
-    bool status = doc["ready"];
-    return status;
-}
-
 // Generate HTML page with optional image and WiFi config
 String getHtmlPage(String message, bool showImage = false)
 {
@@ -427,22 +241,22 @@ String getHtmlPage(String message, bool showImage = false)
     html += "</style></head><body>";
     html += "<h1>ESP32 Camera Control</h1>";
     html += "<div class='status'>";
-    html += "<p>Camera Status: " + String(cameraAvailable ? "Connected" : "Disconnected") + "</p>";
+    html += "<p>Camera Status: " + String(camManager.isCameraAvailable() ? "Connected" : "Disconnected") + "</p>";
     html += "<p>WiFi SSID: " + wifi_ssid + "</p>";
     html += "<p>" + message + "</p>";
     html += "</div>";
     html += "<div><button onclick=\"location.href='/LED_ON'\">Turn LED ON</button>";
     html += "<button class='ping-btn' onclick=\"location.href='/ping'\">PING Camera</button>";
 
-    if (cameraAvailable)
+    if (camManager.isCameraAvailable())
     {
         html += "<button onclick=\"location.href='/capture'\">Take Photo</button>";
         html += "<button onclick=\"location.href='/test'\">Test Camera</button></div>";
 
-        if (showImage && lastImageBase64.length() > 0)
+        if (showImage && camManager.hasImage())
         {
             html += "<div><h2>Latest Image:</h2>";
-            html += "<img src='data:image/jpeg;base64," + lastImageBase64 + "' />";
+            html += "<img src='data:image/jpeg;base64," + camManager.getLastImageBase64() + "' />";
             html += "</div>";
         }
     }
@@ -455,88 +269,6 @@ String getHtmlPage(String message, bool showImage = false)
     html += "<br><a href='/'>Refresh Page</a>";
     html += "</body></html>";
     return html;
-}
-
-// Periodic camera health check function
-void checkCameraAvailability()
-{
-    unsigned long currentTime = millis();
-
-    // Check if it's time for periodic check
-    if (currentTime - lastCameraCheck >= CAMERA_CHECK_INTERVAL)
-    {
-        Serial.println("Performing periodic camera health check...");
-
-        // Quick ping test (faster than full status check)
-        String response = sendCameraCommand("PING");
-        bool newCameraState = (response == "PONG");
-
-        // Check if camera state changed
-        if (newCameraState != cameraAvailable)
-        {
-            Serial.println("Camera state changed: " + String(newCameraState ? "Connected" : "Disconnected"));
-            cameraAvailable = newCameraState;
-
-            // Update display with status change
-            displayMultiLine("Camera status:",
-                             (cameraAvailable ? "Connected" : "Disconnected"),
-                             "Auto-detected", "");
-            delay(2000); // Show status for 2 seconds
-
-            // Flash LED to indicate status change
-            if (cameraAvailable)
-            {
-                // Green flash for connected
-                for (int i = 0; i < 3; i++)
-                {
-                    setPixelColor(0, 255, 0, 200);
-                    setPixelColor(0, 0, 0, 200);
-                }
-                setPixelColor(0, 255, 0); // Return to green
-            }
-            else
-            {
-                // Red flash for disconnected
-                for (int i = 0; i < 3; i++)
-                {
-                    setPixelColor(255, 0, 0, 200);
-                    setPixelColor(0, 0, 0, 200);
-                }
-                setPixelColor(255, 100, 0); // Orange for no camera
-            }
-        }
-        else if (cameraAvailable)
-        {
-            // Camera still available, just log it
-            Serial.println("Camera health check: OK");
-        }
-        else
-        {
-            // Camera still unavailable
-            Serial.println("Camera health check: Still disconnected");
-        }
-
-        lastCameraCheck = currentTime;
-    }
-}
-
-// Add this function to check camera before operations:
-bool ensureCameraReady()
-{
-    if (!cameraAvailable)
-    {
-        Serial.println("Camera not available, testing connection...");
-        String response = sendCameraCommand("PING");
-        cameraAvailable = (response == "PONG");
-
-        if (cameraAvailable)
-        {
-            Serial.println("Camera reconnected!");
-            displayText("Camera reconnected!");
-            delay(1000);
-        }
-    }
-    return cameraAvailable;
 }
 
 void setup()
@@ -559,22 +291,17 @@ void setup()
     }
     displayText("Initializing...");
 
-    // Initialize camera serial connection
-    CamSerial.begin(9600, SERIAL_8N1, CAM_SERIAL_RX, CAM_SERIAL_TX);
-    delay(5000); // Give ESP32-CAM time to boot
-
-    // Test basic serial communication first
+    // Initialize camera manager
+    camManager.setStatusCallback(onCameraStatusChange);
     displayText("Testing serial...");
-    bool serialTest = testCameraSerial();
+    bool serialTest = camManager.begin();
     if (serialTest)
     {
         displayText("Serial OK!");
         Serial.println("Serial communication working!");
 
-        // Now check camera status
-        displayText("Checking camera...");
-        cameraAvailable = checkCamera();
-        if (cameraAvailable)
+        // Camera status is already checked in begin()
+        if (camManager.isCameraAvailable())
         {
             displayText("Camera ready!");
         }
@@ -587,7 +314,6 @@ void setup()
     {
         displayText("Serial failed!");
         Serial.println("Serial communication failed!");
-        cameraAvailable = false;
     }
     delay(2000);
 
@@ -657,7 +383,7 @@ void setup()
         displayMultiLine("Wi-Fi connected!",
                          "IP: " + WiFi.localIP().toString(),
                          "RSSI: " + String(WiFi.RSSI()) + " dBm",
-                         cameraAvailable ? "Camera: OK" : "Camera: FAIL");
+                         camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL");
     }
     else
     {
@@ -680,7 +406,7 @@ void setup()
         Serial.printf("Access at: http://%s\n", WiFi.localIP().toString().c_str());
         displayMultiLine("Server started!",
                          WiFi.localIP().toString(),
-                         cameraAvailable ? "Camera: OK" : "Camera: FAIL",
+                         camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL",
                          "Ready!");
     }
     else
@@ -696,7 +422,7 @@ void setup()
 void loop()
 {
     // Perform periodic camera availability check
-    checkCameraAvailability();
+    camManager.checkCameraAvailability();
 
     // Check for client connections
     WiFiClient client = server.available();
@@ -753,15 +479,15 @@ void loop()
                 else if (request.indexOf("/test") != -1)
                 {
                     Serial.println("Testing camera connection");
-                    bool serialTest = testCameraSerial();
-                    cameraAvailable = checkCamera();
+                    bool serialTest = camManager.testSerialCommunication();
+                    bool cameraStatus = camManager.checkCameraStatus();
 
                     client.println("HTTP/1.1 200 OK");
                     client.println("Content-Type: text/html");
                     client.println();
 
                     String testResult = "Serial: " + String(serialTest ? "OK" : "FAIL") +
-                                        ", Camera: " + String(cameraAvailable ? "OK" : "FAIL");
+                                        ", Camera: " + String(cameraStatus ? "OK" : "FAIL");
                     client.println(getHtmlPage(testResult));
                 }
                 else if (request.indexOf("/capture") != -1)
@@ -769,9 +495,10 @@ void loop()
                     Serial.println("Capture photo requested");
 
                     // Ensure camera is ready before capture
-                    if (ensureCameraReady())
+                    if (camManager.ensureCameraReady())
                     {
-                        bool success = capturePhoto();
+                        displayText("Taking photo...");
+                        bool success = camManager.capturePhoto();
 
                         // Send web response
                         client.println("HTTP/1.1 200 OK");
@@ -780,10 +507,12 @@ void loop()
 
                         if (success)
                         {
+                            displayText("Photo received!");
                             client.println(getHtmlPage("Photo captured successfully!", true));
                         }
                         else
                         {
+                            displayText("Photo failed!");
                             client.println(getHtmlPage("Failed to capture photo"));
                         }
                     }
@@ -803,24 +532,20 @@ void loop()
                     displayText("Pinging camera...");
 
                     // Send PING command
-                    String response = sendCameraCommand("PING");
+                    bool pingSuccess = camManager.ping();
 
-                    Serial.println("PING response: '" + response + "'");
-
-                    // Update camera availability based on ping result
-                    cameraAvailable = (response == "PONG");
+                    Serial.println("PING response: " + String(pingSuccess ? "PONG" : "FAILED"));
 
                     // Update display with result
-                    if (response == "PONG")
+                    if (pingSuccess)
                     {
                         displayMultiLine("PING: SUCCESS", "Response: PONG", "", "");
                     }
                     else
                     {
                         displayMultiLine("PING: FAILED",
-                                         "Response:",
-                                         response.substring(0, 20), // Show first 20 chars
-                                         "");
+                                         "No response",
+                                         "", "");
                     }
 
                     // Send web response
@@ -828,7 +553,7 @@ void loop()
                     client.println("Content-Type: text/html");
                     client.println();
 
-                    String result = "PING Result: " + (response == "PONG" ? "SUCCESS (PONG)" : "FAILED - Response: '" + response + "'");
+                    String result = "PING Result: " + String(pingSuccess ? "SUCCESS (PONG)" : "FAILED - No response");
                     client.println(getHtmlPage(result));
                 }
                 else
@@ -846,7 +571,7 @@ void loop()
         Serial.println("Client disconnected.");
 
         // Return to appropriate LED color based on camera status
-        if (cameraAvailable)
+        if (camManager.isCameraAvailable())
         {
             setPixelColor(0, 255, 0); // Green for camera available
         }
@@ -857,7 +582,7 @@ void loop()
 
         // Update OLED display with status
         displayStatus("Connected",
-                      cameraAvailable ? "Ready" : "Not Found",
+                      camManager.isCameraAvailable() ? "Ready" : "Not Found",
                       "Waiting...");
     }
     else
@@ -869,7 +594,7 @@ void loop()
         if (brightness >= 50 || brightness <= 0)
             direction *= -1;
 
-        if (cameraAvailable)
+        if (camManager.isCameraAvailable())
         {
             setPixelColor(0, brightness, 0); // Green breathing for camera OK
         }
