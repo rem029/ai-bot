@@ -1,12 +1,17 @@
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
-#include "oled_display.h" // Include the OLED display helper
+#include "oled_display.h"     // Include the OLED display helper
 #include "esp32cam_manager.h" // Include the ESP32-CAM manager
-#include "wifi_manager.h" // Include the WiFi manager
+#include "wifi_manager.h"     // Include the WiFi manager
 
 #define LED_PIN 48
 #define NUM_PIXELS 1
+
+#define DEBUG_RX_PIN 16
+#define DEBUG_TX_PIN 17
+
+HardwareSerial debugSerial(2);
 
 // EEPROM settings (keeping for compatibility, but WiFi settings moved to WiFiManager)
 #define EEPROM_SIZE 512
@@ -27,8 +32,10 @@ void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
 }
 
 // Camera status callback to handle status changes
-void onCameraStatusChange(bool connected, bool statusChanged) {
-    if (statusChanged) {
+void onCameraStatusChange(bool connected, bool statusChanged)
+{
+    if (statusChanged)
+    {
         // Update display with status change
         displayMultiLine("Camera status:",
                          (connected ? "Connected" : "Disconnected"),
@@ -36,16 +43,21 @@ void onCameraStatusChange(bool connected, bool statusChanged) {
         delay(2000); // Show status for 2 seconds
 
         // Flash LED to indicate status change
-        if (connected) {
+        if (connected)
+        {
             // Green flash for connected
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 3; i++)
+            {
                 setPixelColor(0, 255, 0, 200);
                 setPixelColor(0, 0, 0, 200);
             }
             setPixelColor(0, 255, 0); // Return to green
-        } else {
+        }
+        else
+        {
             // Red flash for disconnected
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 3; i++)
+            {
                 setPixelColor(255, 0, 0, 200);
                 setPixelColor(0, 0, 0, 200);
             }
@@ -55,8 +67,10 @@ void onCameraStatusChange(bool connected, bool statusChanged) {
 }
 
 // WiFi status callback to handle status changes
-void onWiFiStatusChange(bool connected, String ip, int rssi) {
-    if (connected) {
+void onWiFiStatusChange(bool connected, String ip, int rssi)
+{
+    if (connected)
+    {
         displayMultiLine("Wi-Fi connected!",
                          "IP: " + ip,
                          "RSSI: " + String(rssi) + " dBm",
@@ -65,10 +79,14 @@ void onWiFiStatusChange(bool connected, String ip, int rssi) {
 }
 
 // Display callback for WiFi manager
-void onWiFiDisplayUpdate(String line1, String line2, String line3, String line4) {
-    if (line2.isEmpty() && line3.isEmpty() && line4.isEmpty()) {
+void onWiFiDisplayUpdate(String line1, String line2, String line3, String line4)
+{
+    if (line2.isEmpty() && line3.isEmpty() && line4.isEmpty())
+    {
         displayText(line1);
-    } else {
+    }
+    else
+    {
         displayMultiLine(line1, line2, line3, line4);
     }
 }
@@ -126,6 +144,8 @@ String getHtmlPage(String message, bool showImage = false)
 void setup()
 {
     Serial.begin(115200);
+    debugSerial.begin(230400, SERIAL_8N1, DEBUG_RX_PIN, DEBUG_TX_PIN);
+    debugSerial.println("Starting ESP32-CAM Web Server...");
     pixels.begin();
     pixels.setBrightness(100);
     delay(10);
@@ -137,7 +157,8 @@ void setup()
     // Initialize OLED display
     if (!initOLED())
     {
-        Serial.println("OLED initialization failed!");
+
+        debugSerial.println("OLED initialization failed!");
         while (true)
             ; // Halt if OLED fails
     }
@@ -172,16 +193,19 @@ void setup()
     // Setup WiFi manager with callbacks
     wifiManager.setStatusCallback(onWiFiStatusChange);
     wifiManager.setDisplayCallback(onWiFiDisplayUpdate);
-    
+
     // Initialize and connect WiFi (includes server setup)
     bool wifiConnected = wifiManager.begin(80);
-    
-    if (wifiConnected) {
+
+    if (wifiConnected)
+    {
         displayMultiLine("Server started!",
                          wifiManager.getLocalIP(),
                          camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL",
                          "Ready!");
-    } else {
+    }
+    else
+    {
         displayText("No web server");
     }
 

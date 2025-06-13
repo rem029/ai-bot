@@ -149,24 +149,24 @@ void CameraManager::sendImageBase64() {
     updateActivity();
     
     if (!cameraInitialized) {
-        Serial.println("{\"success\":false,\"error\":\"Camera not initialized\"}");
+        Serial1.println("{\"success\":false,\"error\":\"Camera not initialized\"}");
         return;
     }
 
     camera_fb_t * fb = esp_camera_fb_get();
     if(!fb) {
-        Serial.println("{\"success\":false,\"error\":\"Capture failed\"}");
+        Serial1.println("{\"success\":false,\"error\":\"Capture failed\"}");
         return;
     }
     
-    Serial.printf("{\"success\":true,\"size\":%d,\"width\":%d,\"height\":%d}\n", 
+    Serial1.printf("{\"success\":true,\"size\":%d,\"width\":%d,\"height\":%d}\n", 
                   fb->len, fb->width, fb->height);
     
     delay(100);
     
     const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     
-    Serial.println("BASE64_START");
+    Serial1.println("BASE64_START");
     
     const size_t chunk_size = 3000;
     for (size_t offset = 0; offset < fb->len; offset += chunk_size) {
@@ -186,10 +186,10 @@ void CameraManager::sendImageBase64() {
             encoded += (pos + 2 < fb->len) ? chars[b & 0x3F] : '=';
         }
         
-        Serial.println(encoded);
+        Serial1.println(encoded);
         yield();
     }
     
-    Serial.println("BASE64_END");
+    Serial1.println("BASE64_END");
     esp_camera_fb_return(fb);
 }
