@@ -1,29 +1,19 @@
-#include <WiFi.h>
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 #include "oled_display.h" // Include the OLED display helper
 #include "esp32cam_manager.h" // Include the ESP32-CAM manager
+#include "wifi_manager.h" // Include the WiFi manager
 
 #define LED_PIN 48
 #define NUM_PIXELS 1
 
-// EEPROM settings
+// EEPROM settings (keeping for compatibility, but WiFi settings moved to WiFiManager)
 #define EEPROM_SIZE 512
-#define EEPROM_WIFI_FLAG 0   // 1 byte for flag
-#define EEPROM_SSID_START 1  // 33 bytes for SSID (32 + null terminator)
-#define EEPROM_PASS_START 34 // 65 bytes for password (64 + null terminator)
 
 Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 ESP32CamManager camManager;
-
-// WiFi credentials variables
-String wifi_ssid = "";
-String wifi_password = "";
-bool wifiConfigured = false;
-
-// Create a Wi-Fi server
-WiFiServer server(80);
+WiFiManager wifiManager;
 
 // Helper function to set color and delay
 void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
@@ -64,160 +54,22 @@ void onCameraStatusChange(bool connected, bool statusChanged) {
     }
 }
 
-// Function to save WiFi credentials to EEPROM
-void saveWiFiCredentials(String ssid, String password)
-{
-    Serial.println("Saving WiFi credentials to EEPROM...");
-
-    // Set flag to indicate WiFi is configured
-    EEPROM.write(EEPROM_WIFI_FLAG, 1);
-
-    // Save SSID
-    for (int i = 0; i < 32; i++)
-    {
-        if (i < ssid.length())
-        {
-            EEPROM.write(EEPROM_SSID_START + i, ssid[i]);
-        }
-        else
-        {
-            EEPROM.write(EEPROM_SSID_START + i, 0);
-        }
+// WiFi status callback to handle status changes
+void onWiFiStatusChange(bool connected, String ip, int rssi) {
+    if (connected) {
+        displayMultiLine("Wi-Fi connected!",
+                         "IP: " + ip,
+                         "RSSI: " + String(rssi) + " dBm",
+                         camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL");
     }
-
-    // Save Password
-    for (int i = 0; i < 64; i++)
-    {
-        if (i < password.length())
-        {
-            EEPROM.write(EEPROM_PASS_START + i, password[i]);
-        }
-        else
-        {
-            EEPROM.write(EEPROM_PASS_START + i, 0);
-        }
-    }
-
-    EEPROM.commit();
-    Serial.println("WiFi credentials saved!");
 }
 
-// Function to load WiFi credentials from EEPROM
-bool loadWiFiCredentials()
-{
-    Serial.println("Loading WiFi credentials from EEPROM...");
-
-    // Check if WiFi is configured
-    if (EEPROM.read(EEPROM_WIFI_FLAG) != 1)
-    {
-        Serial.println("No WiFi credentials found in EEPROM");
-        return false;
-    }
-
-    // Load SSID
-    wifi_ssid = "";
-    for (int i = 0; i < 32; i++)
-    {
-        char c = EEPROM.read(EEPROM_SSID_START + i);
-        if (c == 0)
-            break;
-        wifi_ssid += c;
-    }
-
-    // Load Password
-    wifi_password = "";
-    for (int i = 0; i < 64; i++)
-    {
-        char c = EEPROM.read(EEPROM_PASS_START + i);
-        if (c == 0)
-            break;
-        wifi_password += c;
-    }
-
-    if (wifi_ssid.length() > 0)
-    {
-        Serial.println("WiFi credentials loaded from EEPROM");
-        Serial.println("SSID: " + wifi_ssid);
-        return true;
-    }
-
-    return false;
-}
-
-// Function to clear WiFi credentials
-void clearWiFiCredentials()
-{
-    Serial.println("Clearing WiFi credentials...");
-    EEPROM.write(EEPROM_WIFI_FLAG, 0);
-    EEPROM.commit();
-    wifi_ssid = "";
-    wifi_password = "";
-    wifiConfigured = false;
-    Serial.println("WiFi credentials cleared!");
-}
-
-// Function to get WiFi credentials via Serial
-void getWiFiCredentialsFromSerial()
-{
-    Serial.println("\n==========================================");
-    Serial.println("         WiFi CONFIGURATION SETUP        ");
-    Serial.println("==========================================");
-    Serial.println("No WiFi credentials found or connection failed.");
-    Serial.println("Please enter your WiFi credentials:");
-
-    displayMultiLine("WiFi Setup", "Check Serial", "Monitor", "");
-
-    // Get SSID
-    Serial.print("Enter WiFi SSID: ");
-    while (!Serial.available())
-    {
-        delay(100);
-    }
-    wifi_ssid = Serial.readString();
-    wifi_ssid.trim();
-    Serial.println(wifi_ssid);
-
-    // Get Password
-    Serial.print("Enter WiFi Password: ");
-    while (!Serial.available())
-    {
-        delay(100);
-    }
-    wifi_password = Serial.readString();
-    wifi_password.trim();
-    Serial.println("Password entered (hidden)");
-
-    // Confirm credentials
-    Serial.println("\nCredentials entered:");
-    Serial.println("SSID: " + wifi_ssid);
-    Serial.println("Password: " + String(wifi_password.length()) + " characters");
-    Serial.print("Save these credentials? (y/n): ");
-
-    while (!Serial.available())
-    {
-        delay(100);
-    }
-    String confirm = Serial.readString();
-    confirm.trim();
-    confirm.toLowerCase();
-
-    if (confirm == "y" || confirm == "yes")
-    {
-        saveWiFiCredentials(wifi_ssid, wifi_password);
-        wifiConfigured = true;
-        Serial.println("Credentials saved! Restarting...");
-        displayCenteredText("Saved! Restarting...");
-        delay(2000);
-        ESP.restart();
-    }
-    else
-    {
-        Serial.println("Credentials not saved. Please restart to try again.");
-        displayCenteredText("Not saved!");
-        while (true)
-        {
-            delay(1000);
-        }
+// Display callback for WiFi manager
+void onWiFiDisplayUpdate(String line1, String line2, String line3, String line4) {
+    if (line2.isEmpty() && line3.isEmpty() && line4.isEmpty()) {
+        displayText(line1);
+    } else {
+        displayMultiLine(line1, line2, line3, line4);
     }
 }
 
@@ -242,7 +94,7 @@ String getHtmlPage(String message, bool showImage = false)
     html += "<h1>ESP32 Camera Control</h1>";
     html += "<div class='status'>";
     html += "<p>Camera Status: " + String(camManager.isCameraAvailable() ? "Connected" : "Disconnected") + "</p>";
-    html += "<p>WiFi SSID: " + wifi_ssid + "</p>";
+    html += "<p>WiFi SSID: " + wifiManager.getSSID() + "</p>";
     html += "<p>" + message + "</p>";
     html += "</div>";
     html += "<div><button onclick=\"location.href='/LED_ON'\">Turn LED ON</button>";
@@ -317,101 +169,19 @@ void setup()
     }
     delay(2000);
 
-    // Load WiFi credentials from EEPROM
-    wifiConfigured = loadWiFiCredentials();
-
-    if (!wifiConfigured)
-    {
-        getWiFiCredentialsFromSerial();
-    }
-
-    // Connect to Wi-Fi with debugging
-    Serial.println("==========================================");
-    Serial.println("         ESP32-S3 WiFi CONNECTION        ");
-    Serial.println("==========================================");
-    Serial.printf("WiFi SSID: %s\n", wifi_ssid.c_str());
-    Serial.printf("WiFi Password: %s\n", wifi_password.length() > 0 ? "***configured***" : "***NOT SET***");
-    Serial.printf("WiFi Password Length: %d characters\n", wifi_password.length());
-    Serial.println("==========================================");
-
-    displayMultiLine("WiFi Debug:",
-                     "SSID: " + wifi_ssid,
-                     "Pass: " + String(wifi_password.length() > 0 ? "SET" : "EMPTY"),
-                     "");
-    delay(2000);
-
-    Serial.println("Connecting to Wi-Fi...");
-    displayText("Connecting to Wi-Fi...");
-
-    WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
-
-    int wifiAttempts = 0;
-    while (WiFi.status() != WL_CONNECTED && wifiAttempts < 30)
-    {
-        delay(500);
-        Serial.print(".");
-        wifiAttempts++;
-
-        // Update display every 5 attempts
-        if (wifiAttempts % 5 == 0)
-        {
-            displayText("Connecting..." + String(wifiAttempts) + "/30");
-        }
-
-        // Print detailed status every 5 attempts
-        if (wifiAttempts % 5 == 0)
-        {
-            Serial.printf("\nWiFi Status: %d (attempt %d/30)\n", WiFi.status(), wifiAttempts);
-            Serial.printf("MAC Address: %s\n", WiFi.macAddress().c_str());
-        }
-    }
-
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        Serial.println("\n==========================================");
-        Serial.println("         WiFi CONNECTED SUCCESSFULLY     ");
-        Serial.println("==========================================");
-        Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
-        Serial.printf("Subnet: %s\n", WiFi.subnetMask().toString().c_str());
-        Serial.printf("DNS: %s\n", WiFi.dnsIP().toString().c_str());
-        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
-        Serial.printf("Channel: %d\n", WiFi.channel());
-        Serial.println("==========================================");
-
-        // Display Wi-Fi connection status
-        displayMultiLine("Wi-Fi connected!",
-                         "IP: " + WiFi.localIP().toString(),
-                         "RSSI: " + String(WiFi.RSSI()) + " dBm",
-                         camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL");
-    }
-    else
-    {
-        Serial.println("\n==========================================");
-        Serial.println("         WiFi CONNECTION FAILED          ");
-        Serial.println("==========================================");
-        Serial.printf("Final Status: %d\n", WiFi.status());
-        Serial.println("WiFi connection failed! Clearing credentials and restarting...");
-        clearWiFiCredentials();
-        displayCenteredText("WiFi Failed!");
-        delay(2000);
-        ESP.restart();
-    }
-
-    // Start the server only if WiFi connected
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        server.begin();
-        Serial.println("Web server started!");
-        Serial.printf("Access at: http://%s\n", WiFi.localIP().toString().c_str());
+    // Setup WiFi manager with callbacks
+    wifiManager.setStatusCallback(onWiFiStatusChange);
+    wifiManager.setDisplayCallback(onWiFiDisplayUpdate);
+    
+    // Initialize and connect WiFi (includes server setup)
+    bool wifiConnected = wifiManager.begin(80);
+    
+    if (wifiConnected) {
         displayMultiLine("Server started!",
-                         WiFi.localIP().toString(),
+                         wifiManager.getLocalIP(),
                          camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL",
                          "Ready!");
-    }
-    else
-    {
-        Serial.println("Web server NOT started (no WiFi)");
+    } else {
         displayText("No web server");
     }
 
@@ -425,7 +195,7 @@ void loop()
     camManager.checkCameraAvailability();
 
     // Check for client connections
-    WiFiClient client = server.available();
+    WiFiClient client = wifiManager.getServer()->available();
     if (client)
     {
         Serial.println("New client connected!");
@@ -472,7 +242,7 @@ void loop()
 
                     delay(1000);
                     client.stop();
-                    clearWiFiCredentials();
+                    wifiManager.clearCredentials();
                     delay(2000);
                     ESP.restart();
                 }
