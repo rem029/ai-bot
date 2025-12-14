@@ -2,56 +2,62 @@
 #define ESP32CAM_MANAGER_H
 
 #include <Arduino.h>
-#include <HardwareSerial.h>
-#include <ArduinoJson.h>
+#include "esp_camera.h"
 
-// Define camera serial connection pins
-#define CAM_SERIAL_TX 43 // Connect to ESP32-CAM RX (VOR)
-#define CAM_SERIAL_RX 44 // Connect to ESP32-CAM TX (VOT)
+// Freenove ESP32-S3-WROOM Camera Pin Definition
+#define PWDN_GPIO_NUM -1
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 15
+#define SIOD_GPIO_NUM 4
+#define SIOC_GPIO_NUM 5
 
-class ESP32CamManager {
+#define Y9_GPIO_NUM 16
+#define Y8_GPIO_NUM 17
+#define Y7_GPIO_NUM 18
+#define Y6_GPIO_NUM 12
+#define Y5_GPIO_NUM 10
+#define Y4_GPIO_NUM 8
+#define Y3_GPIO_NUM 9
+#define Y2_GPIO_NUM 11
+#define VSYNC_GPIO_NUM 6
+#define HREF_GPIO_NUM 7
+#define PCLK_GPIO_NUM 13
+
+class ESP32CamManager
+{
 private:
-    HardwareSerial* camSerial;
     bool cameraAvailable;
     String lastImageBase64;
-    unsigned long lastCameraCheck;
-    const unsigned long CAMERA_CHECK_INTERVAL = 30000; // Check every 30 seconds
-    
-    // Private helper methods
-    String sendCommand(String command, bool expectLargeData = false);
-    
+
+    // Status callback function type
+    typedef void (*StatusCallback)(bool cameraConnected, bool statusChanged);
+    StatusCallback statusCallback;
+
 public:
     // Constructor
     ESP32CamManager();
-    
+
     // Initialization
     bool begin();
-    
+
     // Communication methods
-    bool testSerialCommunication();
-    String sendCameraCommand(String command, bool expectLargeData = false);
-    
+    bool testSerialCommunication(); // Deprecated/Dummy
+
     // Camera status and control
     bool checkCameraStatus();
     bool isCameraAvailable();
     bool ensureCameraReady();
     void checkCameraAvailability();
-    
+
     // Photo capture
     bool capturePhoto();
     String getLastImageBase64();
     bool hasImage();
-    
+
     // Utility methods
     bool ping();
-    String getVersion();
-    
-    // Status callback function type
-    typedef void (*StatusCallback)(bool cameraConnected, bool statusChanged);
+
     void setStatusCallback(StatusCallback callback);
-    
-private:
-    StatusCallback statusCallback;
 };
 
 #endif // ESP32CAM_MANAGER_H

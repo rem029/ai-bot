@@ -1,174 +1,90 @@
 #include "esp32cam_manager.h"
-#include "oled_display.h"
+#include "mbedtls/base64.h"
 
-ESP32CamManager::ESP32CamManager() : cameraAvailable(false), lastCameraCheck(0), statusCallback(nullptr)
+ESP32CamManager::ESP32CamManager() : cameraAvailable(false), statusCallback(nullptr)
 {
-    camSerial = new HardwareSerial(1); // Use Serial1 for camera communication
 }
 
 bool ESP32CamManager::begin()
 {
-    // Initialize camera serial connection
-    camSerial->begin(9600, SERIAL_8N1, CAM_SERIAL_RX, CAM_SERIAL_TX);
-    delay(5000); // Give ESP32-CAM time to boot
+    camera_config_t config;
+    config.ledc_channel = LEDC_CHANNEL_0;
+    config.ledc_timer = LEDC_TIMER_0;
+    config.pin_d0 = Y2_GPIO_NUM;
+    config.pin_d1 = Y3_GPIO_NUM;
+    config.pin_d2 = Y4_GPIO_NUM;
+    config.pin_d3 = Y5_GPIO_NUM;
+    config.pin_d4 = Y6_GPIO_NUM;
+    config.pin_d5 = Y7_GPIO_NUM;
+    config.pin_d6 = Y8_GPIO_NUM;
+    config.pin_d7 = Y9_GPIO_NUM;
+    config.pin_xclk = XCLK_GPIO_NUM;
+    config.pin_pclk = PCLK_GPIO_NUM;
+    config.pin_vsync = VSYNC_GPIO_NUM;
+    config.pin_href = HREF_GPIO_NUM;
+    config.pin_sccb_sda = SIOD_GPIO_NUM;
+    config.pin_sccb_scl = SIOC_GPIO_NUM;
+    config.pin_pwdn = PWDN_GPIO_NUM;
+    config.pin_reset = RESET_GPIO_NUM;
+    config.xclk_freq_hz = 20000000;
+    config.pixel_format = PIXFORMAT_JPEG; // for streaming
+    config.grab_mode = CAMERA_GRAB_LATEST;
 
-    // Test basic serial communication first
-    bool serialTest = testSerialCommunication();
-    if (serialTest)
+    if (psramFound())
     {
-        Serial.println("Serial communication working!");
-
-        // Now check camera status
-        cameraAvailable = checkCameraStatus();
-        if (cameraAvailable)
-        {
-            Serial.println("Camera ready!");
-        }
-        else
-        {
-            Serial.println("Camera not ready!");
-        }
+        config.frame_size = FRAMESIZE_UXGA;
+        config.jpeg_quality = 10;
+        config.fb_count = 2;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+        Serial.println("PSRAM found, using UXGA config");
     }
     else
     {
-        Serial.println("Serial communication failed!");
-        cameraAvailable = false;
+        config.frame_size = FRAMESIZE_SVGA;
+        config.jpeg_quality = 12;
+        config.fb_count = 1;
+        config.fb_location = CAMERA_FB_IN_DRAM;
+        Serial.println("PSRAM not found, using SVGA config");
     }
 
-    return serialTest;
-}
-
-String ESP32CamManager::sendCommand(String command, bool expectLargeData)
-{
-    // Clear any pending data first
-    while (camSerial->available())
+    // Camera init
+    esp_err_t err = esp_camera_init(&config);
+    if (err != ESP_OK)
     {
-        camSerial->read();
-    }
-
-    Serial.println("Sending command: '" + command + "'");
-    camSerial->println(command);
-
-    if (!expectLargeData)
-    {
-        // Standard response handling with debugging
-        unsigned long startTime = millis();
-        String response = "";
-
-        while (millis() - startTime < 5000)
-        { // 5-second timeout
-            if (camSerial->available())
-            {
-                char c = camSerial->read();
-
-                // Debug: show raw byte values for first few characters
-                if (response.length() < 10)
-                {
-                    Serial.print("Raw byte: ");
-                    Serial.print((int)c);
-                    Serial.print(" (char: '");
-                    if (c >= 32 && c <= 126)
-                    {
-                        Serial.print(c);
-                    }
-                    else
-                    {
-                        Serial.print("?");
-                    }
-                    Serial.println("')");
-                }
-
-                response += c;
-
-                if (c == '\n')
-                {
-                    break;
-                }
-            }
-            yield();
-        }
-
-        response.trim();
-        Serial.println("Final response: '" + response + "' (length: " + String(response.length()) + ")");
-        return response;
-    }
-    else
-    {
-        // --- Add this block for image reception ---
-        String metadata = camSerial->readStringUntil('\n');
-        metadata.trim();
-        Serial.println("Metadata: " + metadata);
-
-        // Wait for BASE64_START
-        while (true)
+        Serial.printf("Camera init failed with error 0x%x\n", err);
+        // Retry with lower XCLK
+        config.xclk_freq_hz = 10000000;
+        err = esp_camera_init(&config);
+        if (err != ESP_OK)
         {
-            String line = camSerial->readStringUntil('\n');
-            line.trim();
-            if (line == "BASE64_START")
-                break;
+            Serial.printf("Camera init retry failed with error 0x%x\n", err);
+            cameraAvailable = false;
+            return false;
         }
-
-        // Collect image data
-        String imageData = "";
-        while (true)
-        {
-            String line = camSerial->readStringUntil('\n');
-            line.trim();
-            if (line == "BASE64_END")
-                break;
-            imageData += line;
-        }
-
-        Serial.println("Image data length: " + String(imageData.length()));
-        return imageData;
     }
-}
 
-String ESP32CamManager::sendCameraCommand(String command, bool expectLargeData)
-{
-    return sendCommand(command, expectLargeData);
+    sensor_t *s = esp_camera_sensor_get();
+    // initial sensors are flipped vertically and colors are a bit saturated
+    if (s->id.PID == OV3660_PID)
+    {
+        s->set_vflip(s, 1);       // flip it back
+        s->set_brightness(s, 1);  // up the brightness just a bit
+        s->set_saturation(s, -2); // lower the saturation
+    }
+
+    Serial.println("Camera initialized successfully!");
+    cameraAvailable = true;
+    return true;
 }
 
 bool ESP32CamManager::testSerialCommunication()
 {
-    Serial.println("Testing camera serial communication...");
-
-    String response = sendCommand("PING");
-    Serial.println("Camera PING response: '" + response + "'");
-
-    if (response == "PONG")
-    {
-        // Test version command
-        response = sendCommand("VERSION");
-        Serial.println("Camera VERSION response: '" + response + "'");
-        return true;
-    }
-
-    return false;
+    return true; // Dummy for compatibility
 }
 
 bool ESP32CamManager::checkCameraStatus()
 {
-    String response = sendCommand("STATUS");
-    Serial.println("STATUS response: " + response);
-
-    if (response.length() == 0)
-    {
-        Serial.println("No response from camera");
-        return false;
-    }
-
-    DynamicJsonDocument doc(256);
-    DeserializationError error = deserializeJson(doc, response);
-
-    if (error)
-    {
-        Serial.println("Failed to parse camera status: " + response);
-        return false;
-    }
-
-    bool status = doc["ready"];
-    return status;
+    return cameraAvailable;
 }
 
 bool ESP32CamManager::isCameraAvailable()
@@ -178,109 +94,55 @@ bool ESP32CamManager::isCameraAvailable()
 
 bool ESP32CamManager::ensureCameraReady()
 {
-    if (!cameraAvailable)
-    {
-        Serial.println("Camera not available, testing connection...");
-        String response = sendCommand("PING");
-        cameraAvailable = (response == "PONG");
-
-        if (cameraAvailable)
-        {
-            Serial.println("Camera reconnected!");
-        }
-    }
     return cameraAvailable;
 }
 
 void ESP32CamManager::checkCameraAvailability()
 {
-    unsigned long currentTime = millis();
-
-    // Check if it's time for periodic check
-    if (currentTime - lastCameraCheck >= CAMERA_CHECK_INTERVAL)
-    {
-        Serial.println("Performing periodic camera health check...");
-
-        // Quick ping test (faster than full status check)
-        String response = sendCommand("PING");
-        bool newCameraState = (response == "PONG");
-
-        // Check if camera state changed
-        if (newCameraState != cameraAvailable)
-        {
-            Serial.println("Camera state changed: " + String(newCameraState ? "Connected" : "Disconnected"));
-            cameraAvailable = newCameraState;
-
-            // Call status callback if registered
-            if (statusCallback)
-            {
-                statusCallback(cameraAvailable, true); // true = status changed
-            }
-        }
-        else if (cameraAvailable)
-        {
-            // Camera still available, just log it
-            Serial.println("Camera health check: OK");
-        }
-        else
-        {
-            // Camera still unavailable
-            Serial.println("Camera health check: Still disconnected");
-        }
-
-        lastCameraCheck = currentTime;
-    }
+    // Local camera doesn't need periodic polling like UART
 }
 
 bool ESP32CamManager::capturePhoto()
 {
-    Serial.println("Requesting photo from ESP32-CAM");
-    displayText("Requesting photo from ESP32-CAM");
+    if (!cameraAvailable)
+        return false;
 
-    // First, send CAPTURE command to take the photo
-    String response = sendCommand("CAPTURE");
-    Serial.println("CAPTURE response: " + response);
-    displayText("CAPTURE response: " + response);
-
-    // Parse the JSON response
-    DynamicJsonDocument doc(256);
-    DeserializationError error = deserializeJson(doc, response);
-    camSerial->println("Deserialized: " + doc.as<String>());
-    if (error)
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb)
     {
-        Serial.print("deserializeJson() failed: ");
-        displayText("deserializeJson() failed: ");
-        Serial.println(error.c_str());
-        Serial.println("Raw response: " + response);
+        Serial.println("Camera capture failed");
         return false;
     }
 
-    // Check if photo was successful
-    bool success = doc["success"];
-    if (success)
+    // Calculate output length for Base64
+    size_t outputLength = ((fb->len + 2) / 3) * 4;
+
+    // Allocate buffer (add 1 for null terminator)
+    char *encoded = (char *)malloc(outputLength + 1);
+    if (encoded == NULL)
     {
-        // Request the image data with chunked reading
-        Serial.println("Requesting image data...");
-        String imageData = sendCommand("GETIMAGE", true); // Enable large data mode
-        displayText("Image received");
-        if (imageData.length() > 100)
-        { // Basic check for base64 data
-            lastImageBase64 = imageData;
-            return true;
-        }
-        else
-        {
-            Serial.println("Invalid image response, size: " + String(imageData.length()));
-            return false;
-        }
-    }
-    else
-    {
-        String error = doc["error"];
-        Serial.println("Capture failed: " + error);
-        displayText("Capture failed: " + error);
+        Serial.println("Memory allocation failed for base64");
+        esp_camera_fb_return(fb);
         return false;
     }
+
+    size_t olen = 0;
+    int ret = mbedtls_base64_encode((unsigned char *)encoded, outputLength + 1, &olen, fb->buf, fb->len);
+
+    if (ret != 0)
+    {
+        Serial.println("Base64 encoding failed");
+        free(encoded);
+        esp_camera_fb_return(fb);
+        return false;
+    }
+
+    encoded[olen] = '\0'; // Ensure null termination
+    lastImageBase64 = String(encoded);
+    free(encoded);
+
+    esp_camera_fb_return(fb);
+    return true;
 }
 
 String ESP32CamManager::getLastImageBase64()
@@ -295,18 +157,7 @@ bool ESP32CamManager::hasImage()
 
 bool ESP32CamManager::ping()
 {
-    String response = sendCommand("PING");
-    bool success = (response == "PONG");
-
-    // Update availability based on ping result
-    cameraAvailable = success;
-
-    return success;
-}
-
-String ESP32CamManager::getVersion()
-{
-    return sendCommand("VERSION");
+    return cameraAvailable;
 }
 
 void ESP32CamManager::setStatusCallback(StatusCallback callback)

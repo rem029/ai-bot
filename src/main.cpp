@@ -8,11 +8,6 @@
 #define LED_PIN 48
 #define NUM_PIXELS 1
 
-#define DEBUG_RX_PIN 16
-#define DEBUG_TX_PIN 17
-
-HardwareSerial debugSerial(2);
-
 // EEPROM settings (keeping for compatibility, but WiFi settings moved to WiFiManager)
 #define EEPROM_SIZE 512
 
@@ -144,8 +139,7 @@ String getHtmlPage(String message, bool showImage = false)
 void setup()
 {
     Serial.begin(115200);
-    debugSerial.begin(230400, SERIAL_8N1, DEBUG_RX_PIN, DEBUG_TX_PIN);
-    debugSerial.println("Starting ESP32-CAM Web Server...");
+    Serial.println("Starting ESP32-CAM Web Server...");
     pixels.begin();
     pixels.setBrightness(100);
     delay(10);
@@ -158,7 +152,7 @@ void setup()
     if (!initOLED())
     {
 
-        debugSerial.println("OLED initialization failed!");
+        Serial.println("OLED initialization failed!");
         while (true)
             ; // Halt if OLED fails
     }
@@ -166,27 +160,17 @@ void setup()
 
     // Initialize camera manager
     camManager.setStatusCallback(onCameraStatusChange);
-    displayText("Testing serial...");
-    bool serialTest = camManager.begin();
-    if (serialTest)
+    displayText("Init Camera...");
+    bool camInit = camManager.begin();
+    if (camInit)
     {
-        displayText("Serial OK!");
-        Serial.println("Serial communication working!");
-
-        // Camera status is already checked in begin()
-        if (camManager.isCameraAvailable())
-        {
-            displayText("Camera ready!");
-        }
-        else
-        {
-            displayText("Camera not ready!");
-        }
+        displayText("Camera ready!");
+        Serial.println("Camera initialized!");
     }
     else
     {
-        displayText("Serial failed!");
-        Serial.println("Serial communication failed!");
+        displayText("Camera failed!");
+        Serial.println("Camera initialization failed!");
     }
     delay(2000);
 
@@ -273,15 +257,13 @@ void loop()
                 else if (request.indexOf("/test") != -1)
                 {
                     Serial.println("Testing camera connection");
-                    bool serialTest = camManager.testSerialCommunication();
                     bool cameraStatus = camManager.checkCameraStatus();
 
                     client.println("HTTP/1.1 200 OK");
                     client.println("Content-Type: text/html");
                     client.println();
 
-                    String testResult = "Serial: " + String(serialTest ? "OK" : "FAIL") +
-                                        ", Camera: " + String(cameraStatus ? "OK" : "FAIL");
+                    String testResult = "Camera: " + String(cameraStatus ? "OK" : "FAIL");
                     client.println(getHtmlPage(testResult));
                 }
                 else if (request.indexOf("/capture") != -1)
