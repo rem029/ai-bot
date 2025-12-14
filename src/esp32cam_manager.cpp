@@ -155,6 +155,19 @@ bool ESP32CamManager::hasImage()
     return lastImageBase64.length() > 0;
 }
 
+camera_fb_t *ESP32CamManager::getFrame()
+{
+    if (!cameraAvailable)
+        return nullptr;
+    return esp_camera_fb_get();
+}
+
+void ESP32CamManager::releaseFrame(camera_fb_t *fb)
+{
+    if (fb)
+        esp_camera_fb_return(fb);
+}
+
 bool ESP32CamManager::ping()
 {
     return cameraAvailable;

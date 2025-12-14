@@ -54,6 +54,10 @@ public:
     String getLastImageBase64();
     bool hasImage();
 
+    // Streaming support
+    camera_fb_t *getFrame();
+    void releaseFrame(camera_fb_t *fb);
+
     // Utility methods
     bool ping();
 

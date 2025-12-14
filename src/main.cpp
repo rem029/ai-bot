@@ -116,6 +116,7 @@ String getHtmlPage(String message, bool showImage = false)
     if (camManager.isCameraAvailable())
     {
         html += "<button onclick=\"location.href='/capture'\">Take Photo</button>";
+        html += "<button onclick=\"location.href='/stream'\">Stream Camera</button>";
         html += "<button onclick=\"location.href='/test'\">Test Camera</button></div>";
 
         if (showImage && camManager.hasImage())
@@ -299,6 +300,37 @@ void loop()
                         client.println();
                         client.println(getHtmlPage("Camera not available - check connection"));
                     }
+                }
+                else if (request.indexOf("/stream") != -1)
+                {
+                    Serial.println("Stream requested");
+                    displayText("Streaming...");
+
+                    // Send MJPEG Header
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
+                    client.println();
+
+                    while (client.connected())
+                    {
+                        camera_fb_t *fb = camManager.getFrame();
+                        if (!fb)
+                        {
+                            Serial.println("Frame capture failed");
+                            break;
+                        }
+
+                        // Send Frame Header and Data
+                        client.println("--frame");
+                        client.println("Content-Type: image/jpeg");
+                        client.println("Content-Length: " + String(fb->len));
+                        client.println();
+                        client.write(fb->buf, fb->len);
+                        client.println();
+
+                        camManager.releaseFrame(fb);
+                    }
+                    displayText("Stream ended");
                 }
                 else if (request.indexOf("/ping") != -1)
                 {
