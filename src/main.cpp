@@ -63,6 +63,28 @@ String urlDecode(String str)
     return decoded;
 }
 
+// Helper to extract query parameters
+String getQueryParam(String request, String paramName)
+{
+    int start = request.indexOf(paramName + "=");
+    if (start == -1)
+        return "";
+    start += paramName.length() + 1;
+    int endAmp = request.indexOf("&", start);
+    int endSpace = request.indexOf(" ", start);
+    int end = -1;
+    if (endAmp != -1 && endSpace != -1)
+        end = min(endAmp, endSpace);
+    else if (endAmp != -1)
+        end = endAmp;
+    else
+        end = endSpace;
+
+    if (end == -1)
+        return "";
+    return request.substring(start, end);
+}
+
 // Camera status callback to handle status changes
 void onCameraStatusChange(bool connected, bool statusChanged)
 {
@@ -172,11 +194,13 @@ String getHtmlPage(String message, bool showImage = false)
 
     html += "<div class='status'><h2>AI Bot Configuration</h2>";
     html += "<form action='/save_api_url' method='get'>";
-    html += "API URL: <input type='text' name='url' value='" + botManager.getApiUrl() + "' style='width: 80%;'><br>";
+    html += "Base URL: <input type='text' name='url' value='" + botManager.getApiBaseUrl() + "' style='width: 80%;' placeholder='http://192.168.1.100:8000'><br>";
+    html += "Message Route: <input type='text' name='msg_route' value='" + botManager.getApiMessageRoute() + "' style='width: 80%;'><br>";
+    html += "Health Route: <input type='text' name='health_route' value='" + botManager.getApiHealthRoute() + "' style='width: 80%;'><br>";
     html += "<input type='submit' value='Save & Test Connection'>";
     html += "</form>";
 
-    if (botManager.getApiUrl().length() > 0)
+    if (botManager.getApiBaseUrl().length() > 0)
     {
         if (botManager.isBotRunning())
         {
@@ -430,15 +454,18 @@ void loop()
                 }
                 else if (request.indexOf("/save_api_url") != -1)
                 {
-                    int urlIdx = request.indexOf("url=");
-                    if (urlIdx != -1)
+                    String url = urlDecode(getQueryParam(request, "url"));
+                    String msgRoute = urlDecode(getQueryParam(request, "msg_route"));
+                    String healthRoute = urlDecode(getQueryParam(request, "health_route"));
+
+                    if (url.length() > 0)
                     {
-                        int endIdx = request.indexOf(" ", urlIdx);
-                        if (endIdx == -1)
-                            endIdx = request.length();
-                        String encodedUrl = request.substring(urlIdx + 4, endIdx);
-                        String url = urlDecode(encodedUrl);
-                        botManager.setApiUrl(url);
+                        if (msgRoute.length() == 0)
+                            msgRoute = "/message";
+                        if (healthRoute.length() == 0)
+                            healthRoute = "/health";
+
+                        botManager.setApiConfig(url, msgRoute, healthRoute);
 
                         bool health = botManager.testConnection();
                         String msg = "API URL Saved. Health Check: " + String(health ? "PASSED" : "FAILED");

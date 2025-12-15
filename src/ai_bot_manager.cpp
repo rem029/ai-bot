@@ -33,93 +33,144 @@ ADDITIONAL CONTEXT (may be empty):
 
 AIBotManager::AIBotManager() : camManager(nullptr), wifiManager(nullptr), botRunning(false), lastRequestTime(0)
 {
-    apiUrl = "";
+    apiBaseUrl = "";
+    apiMessageRoute = "/message";
+    apiHealthRoute = "/health";
     lastBotStatus = "Idle";
+    sessionId = "esp32-bot-" + String(random(100000, 999999));
 }
 
 void AIBotManager::begin(ESP32CamManager *cam, WiFiManager *wifi)
 {
     camManager = cam;
     wifiManager = wifi;
-    loadApiUrl();
+    loadApiConfig();
 }
 
-void AIBotManager::loadApiUrl()
+void AIBotManager::loadApiConfig()
 {
-    apiUrl = "";
-    for (int i = 0; i < EEPROM_API_URL_SIZE; i++)
+    // Load Base URL
+    apiBaseUrl = "";
+    for (int i = 0; i < EEPROM_BASE_URL_SIZE; i++)
     {
-        char c = EEPROM.read(EEPROM_API_URL_ADDR + i);
+        char c = EEPROM.read(EEPROM_BASE_URL_ADDR + i);
         if (c == 0)
             break;
-        apiUrl += c;
+        apiBaseUrl += c;
     }
     // Basic validation
-    if (!apiUrl.startsWith("http"))
+    if (!apiBaseUrl.startsWith("http"))
     {
-        apiUrl = "";
+        apiBaseUrl = "";
     }
-    Serial.println("Loaded API URL: " + apiUrl);
+
+    // Load Message Route
+    apiMessageRoute = "";
+    for (int i = 0; i < EEPROM_MSG_ROUTE_SIZE; i++)
+    {
+        char c = EEPROM.read(EEPROM_MSG_ROUTE_ADDR + i);
+        if (c == 0)
+            break;
+        apiMessageRoute += c;
+    }
+    if (apiMessageRoute.length() == 0)
+        apiMessageRoute = "/message";
+
+    // Load Health Route
+    apiHealthRoute = "";
+    for (int i = 0; i < EEPROM_HEALTH_ROUTE_SIZE; i++)
+    {
+        char c = EEPROM.read(EEPROM_HEALTH_ROUTE_ADDR + i);
+        if (c == 0)
+            break;
+        apiHealthRoute += c;
+    }
+    if (apiHealthRoute.length() == 0)
+        apiHealthRoute = "/health";
+
+    Serial.println("Loaded API Config:");
+    Serial.println("Base: " + apiBaseUrl);
+    Serial.println("Msg: " + apiMessageRoute);
+    Serial.println("Health: " + apiHealthRoute);
 }
 
-void AIBotManager::saveApiUrlToEEPROM(String url)
+void AIBotManager::saveApiConfigToEEPROM(String baseUrl, String messageRoute, String healthRoute)
 {
-    Serial.println("Saving API URL to EEPROM: " + url);
-    for (int i = 0; i < EEPROM_API_URL_SIZE; i++)
+    Serial.println("Saving API Config to EEPROM");
+
+    // Save Base URL
+    for (int i = 0; i < EEPROM_BASE_URL_SIZE; i++)
     {
-        if (i < url.length())
-        {
-            EEPROM.write(EEPROM_API_URL_ADDR + i, url[i]);
-        }
-        else
-        {
-            EEPROM.write(EEPROM_API_URL_ADDR + i, 0);
-        }
+        EEPROM.write(EEPROM_BASE_URL_ADDR + i, (i < baseUrl.length()) ? baseUrl[i] : 0);
     }
+
+    // Save Message Route
+    for (int i = 0; i < EEPROM_MSG_ROUTE_SIZE; i++)
+    {
+        EEPROM.write(EEPROM_MSG_ROUTE_ADDR + i, (i < messageRoute.length()) ? messageRoute[i] : 0);
+    }
+
+    // Save Health Route
+    for (int i = 0; i < EEPROM_HEALTH_ROUTE_SIZE; i++)
+    {
+        EEPROM.write(EEPROM_HEALTH_ROUTE_ADDR + i, (i < healthRoute.length()) ? healthRoute[i] : 0);
+    }
+
     EEPROM.commit();
-    apiUrl = url;
+
+    apiBaseUrl = baseUrl;
+    apiMessageRoute = messageRoute;
+    apiHealthRoute = healthRoute;
 }
 
-void AIBotManager::setApiUrl(String url)
+void AIBotManager::setApiConfig(String baseUrl, String messageRoute, String healthRoute)
 {
-    url.trim();
-    saveApiUrlToEEPROM(url);
+    baseUrl.trim();
+    // Remove trailing slash if present
+    if (baseUrl.endsWith("/"))
+    {
+        baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+    }
+
+    messageRoute.trim();
+    if (!messageRoute.startsWith("/"))
+        messageRoute = "/" + messageRoute;
+
+    healthRoute.trim();
+    if (!healthRoute.startsWith("/"))
+        healthRoute = "/" + healthRoute;
+
+    saveApiConfigToEEPROM(baseUrl, messageRoute, healthRoute);
 }
 
-String AIBotManager::getApiUrl()
+String AIBotManager::getApiBaseUrl()
 {
-    return apiUrl;
+    return apiBaseUrl;
+}
+
+String AIBotManager::getApiMessageRoute()
+{
+    return apiMessageRoute;
+}
+
+String AIBotManager::getApiHealthRoute()
+{
+    return apiHealthRoute;
 }
 
 String AIBotManager::getHealthUrl()
 {
-    // Assume apiUrl is like http://ip:port/message
-    // We want http://ip:port/health
-    String healthUrl = apiUrl;
-    int lastSlash = healthUrl.lastIndexOf('/');
-    if (lastSlash != -1)
-    {
-        // Check if it ends with /message
-        if (healthUrl.endsWith("/message"))
-        {
-            healthUrl = healthUrl.substring(0, healthUrl.length() - 8); // remove /message
-        }
-        else
-        {
-            healthUrl = healthUrl.substring(0, lastSlash);
-        }
-    }
+    return apiBaseUrl + apiHealthRoute;
+}
 
-    if (!healthUrl.endsWith("/"))
-        healthUrl += "/";
-    healthUrl += "health";
-
-    return healthUrl;
+String AIBotManager::getMessageUrl()
+{
+    return apiBaseUrl + apiMessageRoute;
 }
 
 bool AIBotManager::testConnection()
 {
-    if (apiUrl.length() == 0)
+    if (apiBaseUrl.length() == 0)
         return false;
 
     if (!wifiManager->isConnected())
@@ -139,7 +190,7 @@ bool AIBotManager::testConnection()
 
 void AIBotManager::startBot()
 {
-    if (apiUrl.length() > 0)
+    if (apiBaseUrl.length() > 0)
     {
         botRunning = true;
         lastBotStatus = "Running";
@@ -217,9 +268,9 @@ void AIBotManager::sendBotRequest()
     lastBotStatus = "Sending...";
 
     HTTPClient http;
-    http.begin(apiUrl);
+    http.begin(getMessageUrl());
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(10000); // 10s timeout
+    http.setTimeout(60000); // 60s timeout to wait for AI response
 
     // Construct JSON payload manually to avoid memory issues with large Base64 strings in JsonDocument
     String payload;
@@ -238,10 +289,13 @@ void AIBotManager::sendBotRequest()
 
     payload += escapedContext;
     payload += "\",";
-    payload += "\"session_id\":\"esp32-bot\",";
-    payload += "\"audioResponse\":false,";
+    payload += "\"session_id\":\"" + sessionId + "\",";
+    payload += "\"audioResponse\":true,";
     payload += "\"image\":\"" + imageBase64 + "\"";
     payload += "}";
+
+    Serial.println("Bot: Sending JSON payload:");
+    Serial.println(payload);
 
     int httpResponseCode = http.POST(payload);
 
@@ -249,7 +303,7 @@ void AIBotManager::sendBotRequest()
     {
         String response = http.getString();
         Serial.printf("Bot: HTTP Response code: %d\n", httpResponseCode);
-        // Serial.println("Bot: Response: " + response); // Optional: print response
+        Serial.println("Bot: Response: " + response);
         lastBotStatus = "OK: " + String(httpResponseCode);
     }
     else
