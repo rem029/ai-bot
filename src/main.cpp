@@ -145,6 +145,21 @@ void onWiFiDisplayUpdate(String line1, String line2, String line3, String line4)
     }
 }
 
+// Helper to update OLED with Bot info
+void updateOledBotStatus()
+{
+    String line1 = "WiFi: " + String(wifiManager.getRSSI()) + " dBm";
+    String line2 = "Bot: " + botManager.getLastBotStatus();
+    String line3 = "Dir: " + botManager.getLastDirection() + " " + String(botManager.getLastDistance(), 1) + "m";
+    String line4 = "Goal: " + String(botManager.isGoalFound() ? "TRUE" : "FALSE");
+    displayMultiLine(line1, line2, line3, line4);
+}
+
+void onBotStatusChange(String status)
+{
+    updateOledBotStatus();
+}
+
 // Generate HTML page with optional image and WiFi config
 String getHtmlPage(String message, bool showImage = false)
 {
@@ -263,6 +278,7 @@ void setup()
 
     // Initialize AI Bot Manager
     botManager.begin(&camManager, &wifiManager);
+    botManager.setStatusCallback(onBotStatusChange);
 
     // Initialize and connect WiFi (includes server setup)
     bool wifiConnected = wifiManager.begin(80);
@@ -517,9 +533,7 @@ void loop()
         }
 
         // Update OLED display with status
-        displayStatus("Connected",
-                      camManager.isCameraAvailable() ? "Ready" : "Not Found",
-                      "Waiting...");
+        updateOledBotStatus();
     }
     else
     {

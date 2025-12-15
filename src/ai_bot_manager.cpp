@@ -1,4 +1,5 @@
 #include "ai_bot_manager.h"
+#include <ArduinoJson.h>
 
 // Context string from the user snippet
 const char *ROBOT_CONTEXT = R"raw(
@@ -38,6 +39,10 @@ AIBotManager::AIBotManager() : camManager(nullptr), wifiManager(nullptr), botRun
     apiHealthRoute = "/health";
     lastBotStatus = "Idle";
     sessionId = "esp32-bot-" + String(random(100000, 999999));
+    lastDirection = "None";
+    lastDistance = 0.0;
+    goalFound = false;
+    statusCallback = nullptr;
 }
 
 void AIBotManager::begin(ESP32CamManager *cam, WiFiManager *wifi)
@@ -45,6 +50,26 @@ void AIBotManager::begin(ESP32CamManager *cam, WiFiManager *wifi)
     camManager = cam;
     wifiManager = wifi;
     loadApiConfig();
+}
+
+void AIBotManager::setStatusCallback(BotStatusCallback callback)
+{
+    statusCallback = callback;
+}
+
+String AIBotManager::getLastDirection()
+{
+    return lastDirection;
+}
+
+float AIBotManager::getLastDistance()
+{
+    return lastDistance;
+}
+
+bool AIBotManager::isGoalFound()
+{
+    return goalFound;
 }
 
 void AIBotManager::loadApiConfig()
@@ -265,7 +290,9 @@ void AIBotManager::sendBotRequest()
     }
 
     Serial.println("Bot: Sending request...");
-    lastBotStatus = "Sending...";
+    lastBotStatus = "Sending Request";
+    if (statusCallback)
+        statusCallback(lastBotStatus);
 
     HTTPClient http;
     http.begin(getMessageUrl());
@@ -304,7 +331,39 @@ void AIBotManager::sendBotRequest()
         String response = http.getString();
         Serial.printf("Bot: HTTP Response code: %d\n", httpResponseCode);
         Serial.println("Bot: Response: " + response);
-        lastBotStatus = "OK: " + String(httpResponseCode);
+
+        // Clean up response if it contains markdown code blocks
+        String jsonStr = response;
+        jsonStr.trim();
+        if (jsonStr.startsWith("```json"))
+        {
+            jsonStr = jsonStr.substring(7);
+        }
+        else if (jsonStr.startsWith("```"))
+        {
+            jsonStr = jsonStr.substring(3);
+        }
+        if (jsonStr.endsWith("```"))
+        {
+            jsonStr = jsonStr.substring(0, jsonStr.length() - 3);
+        }
+        jsonStr.trim();
+
+        DynamicJsonDocument doc(2048);
+        DeserializationError error = deserializeJson(doc, jsonStr);
+
+        if (!error)
+        {
+            lastBotStatus = "Response Recv";
+            lastDirection = doc["direction"] | "Unknown";
+            lastDistance = doc["distance_m"] | 0.0;
+            goalFound = doc["goal_found"] | false;
+        }
+        else
+        {
+            lastBotStatus = "JSON Error";
+            Serial.println("JSON Parsing failed");
+        }
     }
     else
     {
@@ -312,5 +371,7 @@ void AIBotManager::sendBotRequest()
         lastBotStatus = "Err: " + String(httpResponseCode);
     }
 
+    if (statusCallback)
+        statusCallback(lastBotStatus);
     http.end();
 }

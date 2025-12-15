@@ -14,6 +14,9 @@ public:
     void begin(ESP32CamManager *cam, WiFiManager *wifi);
     void loop();
 
+    typedef void (*BotStatusCallback)(String status);
+    void setStatusCallback(BotStatusCallback callback);
+
     void setApiConfig(String baseUrl, String messageRoute, String healthRoute);
     String getApiBaseUrl();
     String getApiMessageRoute();
@@ -24,6 +27,9 @@ public:
     void stopBot();
     bool isBotRunning();
     String getLastBotStatus();
+    String getLastDirection();
+    float getLastDistance();
+    bool isGoalFound();
 
 private:
     ESP32CamManager *camManager;
@@ -34,9 +40,14 @@ private:
     String apiHealthRoute;
     String sessionId;
 
+    String lastDirection;
+    float lastDistance;
+    bool goalFound;
+
     bool botRunning;
     unsigned long lastRequestTime;
     String lastBotStatus;
+    BotStatusCallback statusCallback;
 
     // EEPROM Configuration
     // WiFi Manager uses first ~100 bytes. We start at 200 to be safe.
