@@ -4,6 +4,7 @@
 #include "oled_display.h"     // Include the OLED display helper
 #include "esp32cam_manager.h" // Include the ESP32-CAM manager
 #include "wifi_manager.h"     // Include the WiFi manager
+#include "ai_bot_manager.h"   // Include the AI Bot manager
 
 #define LED_PIN 48
 #define NUM_PIXELS 1
@@ -14,6 +15,7 @@
 Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 ESP32CamManager camManager;
 WiFiManager wifiManager;
+AIBotManager botManager;
 
 // Helper function to set color and delay
 void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
@@ -24,6 +26,41 @@ void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
     {
         delay(delayMs);
     }
+}
+
+// Helper for URL decoding
+unsigned char h2int(char c)
+{
+    if (c >= '0' && c <= '9')
+        return ((unsigned char)c - '0');
+    if (c >= 'a' && c <= 'f')
+        return ((unsigned char)c - 'a' + 10);
+    if (c >= 'A' && c <= 'F')
+        return ((unsigned char)c - 'A' + 10);
+    return 0;
+}
+
+String urlDecode(String str)
+{
+    String decoded = "";
+    char c;
+    for (int i = 0; i < str.length(); i++)
+    {
+        c = str.charAt(i);
+        if (c == '+')
+            decoded += ' ';
+        else if (c == '%')
+        {
+            i++;
+            char code0 = str.charAt(i);
+            i++;
+            char code1 = str.charAt(i);
+            decoded += (char)((h2int(code0) << 4) | h2int(code1));
+        }
+        else
+            decoded += c;
+    }
+    return decoded;
 }
 
 // Camera status callback to handle status changes
@@ -99,6 +136,7 @@ String getHtmlPage(String message, bool showImage = false)
     html += "button:hover { background-color: #45a049; }";
     html += ".ping-btn { background-color: #2196F3; }";
     html += ".ping-btn:hover { background-color: #0b7dda; }";
+    html += ".stop-btn { background-color: #f44336; }";
     html += ".clear-btn { background-color: #f44336; }";
     html += ".clear-btn:hover { background-color: #da190b; }";
     html += "img { margin-top: 20px; max-width: 100%; border: 1px solid #ddd; }";
@@ -108,6 +146,7 @@ String getHtmlPage(String message, bool showImage = false)
     html += "<div class='status'>";
     html += "<p>Camera Status: " + String(camManager.isCameraAvailable() ? "Connected" : "Disconnected") + "</p>";
     html += "<p>WiFi SSID: " + wifiManager.getSSID() + "</p>";
+    html += "<p>Bot Status: " + botManager.getLastBotStatus() + "</p>";
     html += "<p>" + message + "</p>";
     html += "</div>";
     html += "<div><button onclick=\"location.href='/LED_ON'\">Turn LED ON</button>";
@@ -130,6 +169,25 @@ String getHtmlPage(String message, bool showImage = false)
     {
         html += "</div><p>Camera not available</p>";
     }
+
+    html += "<div class='status'><h2>AI Bot Configuration</h2>";
+    html += "<form action='/save_api_url' method='get'>";
+    html += "API URL: <input type='text' name='url' value='" + botManager.getApiUrl() + "' style='width: 80%;'><br>";
+    html += "<input type='submit' value='Save & Test Connection'>";
+    html += "</form>";
+
+    if (botManager.getApiUrl().length() > 0)
+    {
+        if (botManager.isBotRunning())
+        {
+            html += "<button class='stop-btn' onclick=\"location.href='/stop_bot'\">Stop AI Bot</button>";
+        }
+        else
+        {
+            html += "<button onclick=\"location.href='/start_bot'\">Start AI Bot</button>";
+        }
+    }
+    html += "</div>";
 
     html += "<div><button class='clear-btn' onclick=\"if(confirm('Clear WiFi credentials and restart?')) location.href='/clearwifi'\">Clear WiFi Settings</button></div>";
     html += "<br><a href='/'>Refresh Page</a>";
@@ -179,6 +237,9 @@ void setup()
     wifiManager.setStatusCallback(onWiFiStatusChange);
     wifiManager.setDisplayCallback(onWiFiDisplayUpdate);
 
+    // Initialize AI Bot Manager
+    botManager.begin(&camManager, &wifiManager);
+
     // Initialize and connect WiFi (includes server setup)
     bool wifiConnected = wifiManager.begin(80);
 
@@ -202,6 +263,9 @@ void loop()
 {
     // Perform periodic camera availability check
     camManager.checkCameraAvailability();
+
+    // Run AI Bot loop
+    botManager.loop();
 
     // Check for client connections
     WiFiClient client = wifiManager.getServer()->available();
@@ -363,6 +427,43 @@ void loop()
 
                     String result = "PING Result: " + String(pingSuccess ? "SUCCESS (PONG)" : "FAILED - No response");
                     client.println(getHtmlPage(result));
+                }
+                else if (request.indexOf("/save_api_url") != -1)
+                {
+                    int urlIdx = request.indexOf("url=");
+                    if (urlIdx != -1)
+                    {
+                        int endIdx = request.indexOf(" ", urlIdx);
+                        if (endIdx == -1)
+                            endIdx = request.length();
+                        String encodedUrl = request.substring(urlIdx + 4, endIdx);
+                        String url = urlDecode(encodedUrl);
+                        botManager.setApiUrl(url);
+
+                        bool health = botManager.testConnection();
+                        String msg = "API URL Saved. Health Check: " + String(health ? "PASSED" : "FAILED");
+
+                        client.println("HTTP/1.1 200 OK");
+                        client.println("Content-Type: text/html");
+                        client.println();
+                        client.println(getHtmlPage(msg));
+                    }
+                }
+                else if (request.indexOf("/start_bot") != -1)
+                {
+                    botManager.startBot();
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("AI Bot Started"));
+                }
+                else if (request.indexOf("/stop_bot") != -1)
+                {
+                    botManager.stopBot();
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("AI Bot Stopped"));
                 }
                 else
                 {
