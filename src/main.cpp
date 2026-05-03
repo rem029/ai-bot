@@ -1,6 +1,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
+#include <ESP32Servo.h>
 #include "oled_display.h"     // Include the OLED display helper
 #include "esp32cam_manager.h" // Include the ESP32-CAM manager
 #include "wifi_manager.h"     // Include the WiFi manager
@@ -8,6 +9,7 @@
 
 #define LED_PIN 48
 #define NUM_PIXELS 1
+#define SERVO_PIN 41
 
 // EEPROM settings (keeping for compatibility, but WiFi settings moved to WiFiManager)
 #define EEPROM_SIZE 512
@@ -16,6 +18,7 @@ Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 ESP32CamManager camManager;
 WiFiManager wifiManager;
 AIBotManager botManager;
+Servo testServo;
 
 // Helper function to set color and delay
 void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
@@ -244,6 +247,22 @@ void setup()
     pixels.setBrightness(100);
     delay(10);
     pinMode(LED_BUILTIN, OUTPUT);
+
+    // Test Servo Motor on Pin 41
+    Serial.println("Testing Servo Motor on pin 41...");
+    testServo.setPeriodHertz(50);           // standard 50hz servo
+    testServo.attach(SERVO_PIN, 500, 2400); // Standard pulses for many servos
+    testServo.write(90);                    // Move to center
+    delay(200);
+    testServo.write(110); // Move slightly
+    delay(200);
+    testServo.write(70); // Move back slightly
+    delay(200);
+    testServo.write(90); // Back to center
+    delay(500);          // Give it extra time to reach 90 before detaching
+    // Note: Keeping it attached for now, or detaching if only for confirm
+    testServo.detach();
+    Serial.println("Servo test complete.");
 
     // Initialize EEPROM
     EEPROM.begin(EEPROM_SIZE);
