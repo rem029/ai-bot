@@ -90,10 +90,11 @@ void onCameraStatusChange(bool connected, bool statusChanged)
 {
     if (statusChanged)
     {
-        // Update display with status change
-        displayMultiLine("Camera status:",
-                         (connected ? "Connected" : "Disconnected"),
-                         "Auto-detected", "");
+        // Update display with status change using the main UI layout
+        drawMain(wifiManager.getLocalIP(),
+                 connected ? "Cam Connect" : "Cam Disconnect",
+                 botManager.getLastDirection(),
+                 String(botManager.getLastDistance(), 1) + "m");
         delay(2000); // Show status for 2 seconds
 
         // Flash LED to indicate status change
@@ -148,11 +149,12 @@ void onWiFiDisplayUpdate(String line1, String line2, String line3, String line4)
 // Helper to update OLED with Bot info
 void updateOledBotStatus()
 {
-    String line1 = "WiFi: " + String(wifiManager.getRSSI()) + " dBm";
-    String line2 = "Bot: " + botManager.getLastBotStatus();
-    String line3 = "Dir: " + botManager.getLastDirection() + " " + String(botManager.getLastDistance(), 1) + "m";
-    String line4 = "Goal: " + String(botManager.isGoalFound() ? "TRUE" : "FALSE");
-    displayMultiLine(line1, line2, line3, line4);
+    String ip = wifiManager.getLocalIP();
+    String status = botManager.getLastBotStatus();
+    String direction = botManager.getLastDirection();
+    String distance = String(botManager.getLastDistance(), 1) + "m";
+
+    drawMain(ip, status, direction, distance);
 }
 
 void onBotStatusChange(String status)
@@ -249,25 +251,24 @@ void setup()
     // Initialize OLED display
     if (!initOLED())
     {
-
         Serial.println("OLED initialization failed!");
         while (true)
             ; // Halt if OLED fails
     }
-    displayText("Initializing...");
+    drawIntro("Initializing...");
 
     // Initialize camera manager
     camManager.setStatusCallback(onCameraStatusChange);
-    displayText("Init Camera...");
+    drawIntro("Init Camera...");
     bool camInit = camManager.begin();
     if (camInit)
     {
-        displayText("Camera ready!");
+        drawIntro("Camera ready!");
         Serial.println("Camera initialized!");
     }
     else
     {
-        displayText("Camera failed!");
+        drawIntro("Camera failed!");
         Serial.println("Camera initialization failed!");
     }
     delay(2000);
@@ -281,18 +282,19 @@ void setup()
     botManager.setStatusCallback(onBotStatusChange);
 
     // Initialize and connect WiFi (includes server setup)
+    drawIntro("Connecting WiFi...");
     bool wifiConnected = wifiManager.begin(80);
 
     if (wifiConnected)
     {
-        displayMultiLine("Server started!",
-                         wifiManager.getLocalIP(),
-                         camManager.isCameraAvailable() ? "Camera: OK" : "Camera: FAIL",
-                         "Ready!");
+        drawMain(wifiManager.getLocalIP(),
+                 "Ready!",
+                 "none",
+                 "0.0m");
     }
     else
     {
-        displayText("No web server");
+        drawIntro("No WiFi");
     }
 
     // Indicate server availability with green LED
@@ -312,7 +314,10 @@ void loop()
     if (client)
     {
         Serial.println("New client connected!");
-        displayText("Client connected!");
+        drawMain(wifiManager.getLocalIP(),
+                 "Client Conn",
+                 botManager.getLastDirection(),
+                 String(botManager.getLastDistance(), 1) + "m");
 
         // Flash LED to indicate client connection
         for (int i = 0; i < 3; i++)
@@ -336,7 +341,10 @@ void loop()
                     setPixelColor(255, 0, 0); // Solid Red
 
                     // Update OLED display
-                    displayText("LED ON");
+                    drawMain(wifiManager.getLocalIP(),
+                             "LED ON",
+                             botManager.getLastDirection(),
+                             String(botManager.getLastDistance(), 1) + "m");
 
                     // Send web response
                     client.println("HTTP/1.1 200 OK");
@@ -378,7 +386,10 @@ void loop()
                     // Ensure camera is ready before capture
                     if (camManager.ensureCameraReady())
                     {
-                        displayText("Taking photo...");
+                        drawMain(wifiManager.getLocalIP(),
+                                 "Taking Photo",
+                                 botManager.getLastDirection(),
+                                 String(botManager.getLastDistance(), 1) + "m");
                         bool success = camManager.capturePhoto();
 
                         // Send web response
@@ -388,12 +399,18 @@ void loop()
 
                         if (success)
                         {
-                            displayText("Photo received!");
+                            drawMain(wifiManager.getLocalIP(),
+                                     "Photo OK",
+                                     botManager.getLastDirection(),
+                                     String(botManager.getLastDistance(), 1) + "m");
                             client.println(getHtmlPage("Photo captured successfully!", true));
                         }
                         else
                         {
-                            displayText("Photo failed!");
+                            drawMain(wifiManager.getLocalIP(),
+                                     "Photo FAIL",
+                                     botManager.getLastDirection(),
+                                     String(botManager.getLastDistance(), 1) + "m");
                             client.println(getHtmlPage("Failed to capture photo"));
                         }
                     }
