@@ -20,6 +20,41 @@ WiFiManager wifiManager;
 AIBotManager botManager;
 Servo testServo;
 
+int servoCenter = 28;     // Default center
+int servoLeft = 10;       // Default left
+int servoRight = 50;      // Default right
+int currentServoPos = 28; // Track current position
+
+// EEPROM addresses for servo settings
+#define ADDR_SERVO_CENTER 500
+#define ADDR_SERVO_LEFT 504
+#define ADDR_SERVO_RIGHT 508
+
+// Servo movement functions
+void servoMoveNext(int targetPos)
+{
+    testServo.attach(SERVO_PIN, 500, 2400);
+    testServo.write(targetPos);
+    currentServoPos = targetPos;
+    delay(500);
+    testServo.detach();
+}
+
+void servoMoveCenter()
+{
+    servoMoveNext(servoCenter);
+}
+
+void servoMoveLeft()
+{
+    servoMoveNext(servoLeft);
+}
+
+void servoMoveRight()
+{
+    servoMoveNext(servoRight);
+}
+
 // Helper function to set color and delay
 void setPixelColor(uint8_t r, uint8_t g, uint8_t b, int delayMs = 0)
 {
@@ -163,6 +198,23 @@ void updateOledBotStatus()
 void onBotStatusChange(String status)
 {
     updateOledBotStatus();
+
+    // Trigger servo based on direction
+    String direction = botManager.getLastDirection();
+    direction.toLowerCase();
+
+    if (direction == "left")
+    {
+        servoMoveLeft();
+    }
+    else if (direction == "right")
+    {
+        servoMoveRight();
+    }
+    else if (direction == "forward")
+    {
+        servoMoveCenter();
+    }
 }
 
 // Generate HTML page with optional image and WiFi config
@@ -193,6 +245,24 @@ String getHtmlPage(String message, bool showImage = false)
     html += "</div>";
     html += "<div><button onclick=\"location.href='/LED_ON'\">Turn LED ON</button>";
     html += "<button class='ping-btn' onclick=\"location.href='/ping'\">PING Camera</button>";
+
+    html += "</div><div class='status'><h2>Servo Calibration</h2>";
+    html += "<div>";
+    html += "<button onclick=\"location.href='/servo_left'\" style='background-color: #2196F3;'>LEFT</button>";
+    html += "<button onclick=\"location.href='/servo_center'\" style='background-color: #2196F3;'>CENTER</button>";
+    html += "<button onclick=\"location.href='/servo_right'\" style='background-color: #2196F3;'>RIGHT</button>";
+    html += "</div><br>";
+    html += "<div>";
+    html += "<p>Live Position: <b>" + String(currentServoPos) + "</b></p>";
+    html += "<button onclick=\"location.href='/servo_step?dir=dec'\" style='background-color: #f44336;'> -1 </button> ";
+    html += "<button onclick=\"location.href='/servo_step?dir=inc'\" style='background-color: #4CAF50;'> +1 </button>";
+    html += "</div><br>";
+    html += "<form action='/calibrate_servo' method='get'>";
+    html += "Left: <input type='number' name='left' value='" + String(servoLeft) + "' style='width: 60px;'> ";
+    html += "Center: <input type='number' name='center' value='" + String(servoCenter) + "' style='width: 60px;'> ";
+    html += "Right: <input type='number' name='right' value='" + String(servoRight) + "' style='width: 60px;'> ";
+    html += "<br><br><input type='submit' value='Save & Test All'>";
+    html += "</form></div>";
 
     if (camManager.isCameraAvailable())
     {
@@ -250,22 +320,40 @@ void setup()
 
     // Test Servo Motor on Pin 41
     Serial.println("Testing Servo Motor on pin 41...");
-    testServo.setPeriodHertz(50);           // standard 50hz servo
-    testServo.attach(SERVO_PIN, 500, 2400); // Standard pulses for many servos
-    testServo.write(90);                    // Move to center
-    delay(200);
-    testServo.write(110); // Move slightly
-    delay(200);
-    testServo.write(70); // Move back slightly
-    delay(200);
-    testServo.write(90); // Back to center
-    delay(500);          // Give it extra time to reach 90 before detaching
-    // Note: Keeping it attached for now, or detaching if only for confirm
-    testServo.detach();
-    Serial.println("Servo test complete.");
-
     // Initialize EEPROM
     EEPROM.begin(EEPROM_SIZE);
+
+    // Load Servo Settings from EEPROM
+    int storedCenter, storedLeft, storedRight;
+    EEPROM.get(ADDR_SERVO_CENTER, storedCenter);
+    EEPROM.get(ADDR_SERVO_LEFT, storedLeft);
+    EEPROM.get(ADDR_SERVO_RIGHT, storedRight);
+
+    // Validate (EEPROM returns -1 or 0xFFFFFFFF if never written)
+    if (storedCenter != -1 && storedCenter >= -90 && storedCenter <= 270)
+    {
+        servoCenter = storedCenter;
+        currentServoPos = servoCenter; // Set initial position to center
+    }
+    if (storedLeft != -1 && storedLeft >= -90 && storedLeft <= 270)
+        servoLeft = storedLeft;
+    if (storedRight != -1 && storedRight >= -90 && storedRight <= 270)
+        servoRight = storedRight;
+
+    // Test Servo Motor on Pin 41
+    Serial.println("Testing Servo Motor on pin 41...");
+    testServo.setPeriodHertz(50);           // standard 50hz servo
+    testServo.attach(SERVO_PIN, 500, 2400); // Standard pulses for many servos
+    testServo.write(servoCenter);           // Move to center
+    delay(300);
+    testServo.write(servoLeft); // Move to left limit
+    delay(300);
+    testServo.write(servoRight); // Move to right limit
+    delay(300);
+    testServo.write(servoCenter); // Back to center
+    delay(500);                   // Give it extra time to reach before detaching
+    testServo.detach();
+    Serial.println("Servo test complete.");
 
     // Initialize OLED display
     if (!initOLED())
@@ -503,6 +591,81 @@ void loop()
 
                     String result = "PING Result: " + String(pingSuccess ? "SUCCESS (PONG)" : "FAILED - No response");
                     client.println(getHtmlPage(result));
+                }
+                else if (request.indexOf("/calibrate_servo") != -1)
+                {
+                    String cStr = getQueryParam(request, "center");
+                    String lStr = getQueryParam(request, "left");
+                    String rStr = getQueryParam(request, "right");
+
+                    if (cStr.length() > 0)
+                        servoCenter = cStr.toInt();
+                    if (lStr.length() > 0)
+                        servoLeft = lStr.toInt();
+                    if (rStr.length() > 0)
+                        servoRight = rStr.toInt();
+
+                    Serial.println("Updating Servo config: L=" + String(servoLeft) + " C=" + String(servoCenter) + " R=" + String(servoRight));
+
+                    // Save to EEPROM
+                    EEPROM.put(ADDR_SERVO_CENTER, servoCenter);
+                    EEPROM.put(ADDR_SERVO_LEFT, servoLeft);
+                    EEPROM.put(ADDR_SERVO_RIGHT, servoRight);
+                    EEPROM.commit();
+
+                    // Test the sequence
+                    testServo.attach(SERVO_PIN, 500, 2400);
+                    testServo.write(servoLeft);
+                    delay(400);
+                    testServo.write(servoRight);
+                    delay(400);
+                    testServo.write(servoCenter);
+                    delay(500);
+                    testServo.detach();
+
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("Servo calibrated and saved to memory."));
+                }
+                else if (request.indexOf("/servo_left") != -1)
+                {
+                    servoMoveLeft();
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("Servo moved Left"));
+                }
+                else if (request.indexOf("/servo_center") != -1)
+                {
+                    servoMoveCenter();
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("Servo moved Center"));
+                }
+                else if (request.indexOf("/servo_right") != -1)
+                {
+                    servoMoveRight();
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("Servo moved Right"));
+                }
+                else if (request.indexOf("/servo_step") != -1)
+                {
+                    String dir = getQueryParam(request, "dir");
+                    if (dir == "inc")
+                        currentServoPos += 1;
+                    else if (dir == "dec")
+                        currentServoPos -= 1;
+
+                    servoMoveNext(currentServoPos);
+
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println();
+                    client.println(getHtmlPage("Servo stepped to " + String(currentServoPos)));
                 }
                 else if (request.indexOf("/save_api_url") != -1)
                 {
